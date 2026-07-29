@@ -1,0 +1,14 @@
+steps:
+  daily_target: 7000
+strength:
+  monthly_sessions: 12
+racquet:
+  weekly_sessions: 2        # tennis or pickleball, any day - no day-of-week assumptions
+weight:
+  unit: lb
+  checkpoints:
+    - { date: 2026-09-30, target: 215 }
+    - { date: 2026-12-31, target: 210 }
+measurements:
+  - biceps_flexed_in
+  - waist_in

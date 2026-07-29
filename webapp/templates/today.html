@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %}Today — Fitness{% endblock %}
+
+{% block content %}
+<div class="eyebrow" style="margin-bottom: 6px;">{{ today_label }}</div>
+
+<!-- Readiness strip -->
+<div class="card">
+  <div class="readiness-strip">
+    <span class="readiness-dot" data-state="{{ readiness.state }}"></span>
+    <span class="readiness-label" data-state="{{ readiness.state }}">{{ readiness.state }}</span>
+    <span class="readiness-detail">
+      Body Battery {{ today_metrics.body_battery_wake if today_metrics.body_battery_wake is not none else '—' }}
+      · Sleep score {{ today_metrics.sleep_score if today_metrics.sleep_score is not none else '—' }}
+    </span>
+  </div>
+</div>
+
+<!-- Pace rails -->
+{% for rail in rails %}
+<div class="pace-rail" data-on-pace="{{ 'true' if rail.on_pace else 'false' }}">
+  <div class="pace-rail-label eyebrow">{{ rail.label }}</div>
+  <div class="pace-rail-track">
+    <div class="pace-rail-fill" style="--fill-pct: {{ rail.fill_pct }}%"></div>
+    <div class="pace-rail-tick" style="--tick-pct: {{ rail.tick_pct }}%">
+      <span class="pace-rail-tick-label">expected</span>
+    </div>
+  </div>
+  <div class="pace-rail-numbers">
+    {{ "{:,}".format(rail.actual) if rail.actual is number else rail.actual }}
+    <span class="muted">/ {{ "{:,}".format(rail.target) if rail.target is number else rail.target }}{{ rail.unit }}</span>
+  </div>
+</div>
+{% endfor %}
+
+<hr class="hairline">
+
+<!-- Yesterday, in one line per metric -->
+<div class="card">
+  <div class="eyebrow" style="margin-bottom: 8px;">Yesterday</div>
+  <div class="row">
+    <span class="mono">{{ yesterday.steps if yesterday.steps is not none else '—' }} steps</span>
+    <span class="compare">avg 7d: {{ yesterday.steps_avg_7d if yesterday.steps_avg_7d is not none else '—' }}</span>
+  </div>
+  <div class="row">
+    {% if yesterday.activity_labels %}
+    <span class="mono">{{ yesterday.activity_labels | join(', ') }}</span>
+    {% else %}
+    <span class="compare">No activity logged</span>
+    {% endif %}
+    <span></span>
+  </div>
+  <div class="row">
+    <span class="mono">{{ yesterday.active_calories if yesterday.active_calories is not none else '—' }} cal active</span>
+    <span class="compare">avg 7d: {{ yesterday.active_calories_avg_7d if yesterday.active_calories_avg_7d is not none else '—' }}</span>
+  </div>
+  <div class="row">
+    <span class="mono">{{ yesterday.sleep_hours if yesterday.sleep_hours is not none else '—' }}h sleep</span>
+    <span class="compare">avg 7d: {{ yesterday.sleep_hours_avg_7d if yesterday.sleep_hours_avg_7d is not none else '—' }}</span>
+  </div>
+</div>
+{% endblock %}
