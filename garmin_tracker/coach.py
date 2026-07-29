@@ -13,10 +13,23 @@ from datetime import date
 from typing import Optional
 
 import anthropic
+from tenacity import (
+    retry,
+    retry_if_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 from garmin_tracker import analytics, config, db
 
 MODEL = "claude-sonnet-5"
+
+RETRYABLE_ERRORS = (
+    anthropic.OverloadedError,
+    anthropic.RateLimitError,
+    anthropic.APIConnectionError,
+    anthropic.InternalServerError,
+)
 
 DAILY_SYSTEM_PROMPT = """You are a strength and conditioning coach reviewing one athlete's data.
 
@@ -98,14 +111,24 @@ def _store_brief(conn, kind: str, today: date, body: str, snapshot: dict) -> dic
     return row
 
 
-def _call_claude(system_prompt: str, user_content: str, max_tokens: int) -> str:
-    client = _client()
-    response = client.messages.create(
+@retry(
+    retry=retry_if_exception_type(RETRYABLE_ERRORS),
+    stop=stop_after_attempt(4),
+    wait=wait_exponential(multiplier=2, min=2, max=30),
+    reraise=True,
+)
+def _create_message(client, system_prompt: str, user_content: str, max_tokens: int):
+    return client.messages.create(
         model=MODEL,
         max_tokens=max_tokens,
         system=system_prompt,
         messages=[{"role": "user", "content": user_content}],
     )
+
+
+def _call_claude(system_prompt: str, user_content: str, max_tokens: int) -> str:
+    client = _client()
+    response = _create_message(client, system_prompt, user_content, max_tokens)
     if response.stop_reason == "max_tokens":
         raise RuntimeError(
             f"Claude response was truncated at max_tokens={max_tokens} - raise it and retry."
