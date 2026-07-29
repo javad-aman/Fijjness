@@ -1,22 +1,32 @@
-name: Daily Garmin sync + coach email
+name: Garmin sync + coach brief/review + email
 
+# All times are US Central. GitHub Actions cron doesn't follow DST, so these
+# drift an hour twice a year (currently set for CDT / UTC-5).
 on:
   schedule:
-    # ~7:00 AM US Central (UTC-5 during daylight saving / UTC-6 standard time).
-    # GitHub Actions cron doesn't follow DST, so this drifts an hour twice a year.
-    - cron: "0 12 * * *"
-  workflow_dispatch: {}
+    - cron: "30 9 * * *"    # 04:30 - sync
+    - cron: "0 16 * * *"    # 11:00 - sync (catch late-syncing watch data)
+    - cron: "45 10 * * *"   # 05:45 - generate daily brief
+    - cron: "0 11 * * *"    # 06:00 - email daily brief
+    - cron: "0 23 * * 0"    # 18:00 Sunday - generate weekly review
+    - cron: "30 23 * * 0"   # 18:30 Sunday - email weekly review
+  workflow_dispatch:
+    inputs:
+      job:
+        description: "Job to run manually"
+        type: choice
+        default: sync
+        options: [sync, daily-brief, daily-email, weekly-review, weekly-email]
 
 jobs:
-  sync-and-email:
+  sync:
+    if: github.event.schedule == '30 9 * * *' || github.event.schedule == '0 16 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'sync')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - name: Install dependencies
         run: pip install -r requirements.txt
 
@@ -46,7 +56,39 @@ jobs:
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: python -m garmin_tracker.sync
 
-      - name: Send coach email
+      - name: Save Garmin session cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .garmin_tokens
+          key: garmin-tokens-${{ github.run_id }}
+
+  daily-brief:
+    if: github.event.schedule == '45 10 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'daily-brief')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Generate daily brief
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m garmin_tracker.coach --kind daily
+
+  daily-email:
+    if: github.event.schedule == '0 11 * * *' || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'daily-email')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Email daily brief
         env:
           TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
@@ -54,11 +96,39 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           TO_EMAIL: ${{ secrets.TO_EMAIL }}
           DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
-        run: python -m garmin_tracker.coach_email
+        run: python -m garmin_tracker.coach_email --kind daily
 
-      - name: Save Garmin session cache
-        if: always()
-        uses: actions/cache/save@v4
+  weekly-review:
+    if: github.event.schedule == '0 23 * * 0' || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'weekly-review')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          path: .garmin_tokens
-          key: garmin-tokens-${{ github.run_id }}
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Generate weekly review
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python -m garmin_tracker.coach --kind weekly
+
+  weekly-email:
+    if: github.event.schedule == '30 23 * * 0' || (github.event_name == 'workflow_dispatch' && github.event.inputs.job == 'weekly-email')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Email weekly review
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+          GMAIL_ADDRESS: ${{ secrets.GMAIL_ADDRESS }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+          TO_EMAIL: ${{ secrets.TO_EMAIL }}
+          DASHBOARD_URL: ${{ secrets.DASHBOARD_URL }}
+        run: python -m garmin_tracker.coach_email --kind weekly

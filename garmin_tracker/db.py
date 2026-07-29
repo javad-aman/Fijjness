@@ -146,7 +146,10 @@ def _to_turso_arg(value):
     if isinstance(value, int):
         return {"type": "integer", "value": str(value)}
     if isinstance(value, float):
-        return {"type": "float", "value": str(value)}
+        # Turso's real server wants a JSON number here despite what its docs
+        # say ("encoded as a string") - confirmed directly against the API:
+        # a string value returns 400 "invalid type: string, expected f64".
+        return {"type": "float", "value": value}
     if isinstance(value, (bytes, bytearray)):
         return {"type": "blob", "base64": base64.b64encode(value).decode("ascii")}
     return {"type": "text", "value": str(value)}
@@ -242,8 +245,11 @@ def get_connection():
         return TursoConnection(config.TURSO_DATABASE_URL, config.TURSO_AUTH_TOKEN)
 
     Path(config.DB_PATH).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(config.DB_PATH)
+    conn = sqlite3.connect(config.DB_PATH, timeout=30)
     conn.row_factory = sqlite3.Row
+    # WAL mode allows concurrent readers (dashboard) while syncs write, and is
+    # required for Litestream's continuous backup replication to work at all.
+    conn.execute("PRAGMA journal_mode=WAL")
     return conn
 
 

@@ -93,6 +93,34 @@ Shows:
 - Cached OAuth session: `.garmin_tokens/` (git-ignored)
 - To start over from scratch, delete `data/garmin.db` and re-run `--full`
 
+## Backups
+
+`data/garmin.db` is continuously backed up to a private Cloudflare R2 bucket
+(free tier) via [Litestream](https://litestream.io), which streams SQLite's
+WAL to object storage in near-real-time.
+
+- Binary + config: `tools/litestream.exe`, `litestream.yml` (both git-ignored —
+  `litestream.yml` is generated from `litestream.yml.example`, credentials
+  come from the `LITESTREAM_*` vars in `.env`)
+- Runs automatically at login via a script in the Windows Startup folder
+  (`tools/run_litestream.ps1`, launched by a `.vbs` wrapper so it starts
+  hidden, no console window) — Task Scheduler wasn't available on this
+  account, so Startup is the persistence mechanism instead
+- Logs: `litestream.log` / `litestream.err.log` (git-ignored)
+- **Restore** (e.g. after a disk failure): 
+  ```bash
+  tools/litestream.exe restore -config litestream.yml -o data/garmin.db data/garmin.db
+  ```
+- The database runs in WAL journal mode (`PRAGMA journal_mode=WAL`, set
+  automatically in `garmin_tracker/db.py`) — required for Litestream to work,
+  and a nice side effect: the dashboard can read while a sync is writing.
+
+Setup steps (only needed once, already done for this install): create a free
+Cloudflare account → R2 Object Storage → create a bucket → create an R2 API
+token (Object Read & Write) → put the bucket name, endpoint URL, access key
+ID, and secret access key into `.env` as `LITESTREAM_BUCKET`,
+`LITESTREAM_ENDPOINT`, `LITESTREAM_ACCESS_KEY_ID`, `LITESTREAM_SECRET_ACCESS_KEY`.
+
 ## Daily coach email
 
 `garmin_tracker/coach_email.py` sends a short daily digest (yesterday's

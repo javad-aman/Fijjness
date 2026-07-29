@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Activity — Fitness{% endblock %}
+
+{% block content %}
+<div class="eyebrow" style="margin-bottom: 12px;">Weekly active calories by type</div>
+<div class="card">
+  <div class="chart-scroll">{{ stacked_bar_svg | safe }}</div>
+</div>
+
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Steps by weekday ({{ heatmap_month }})</div>
+<div class="card">
+  <div class="cycle-grid">
+    {% for name, svg in cycle_panels %}
+    <div>{{ svg | safe }}</div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Training calendar</div>
+<div class="card">
+  <div class="chart-scroll">{{ heatmap_svg | safe }}</div>
+</div>
+
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Avg calories per session (90d)</div>
+<div class="card">
+  {% if avg_calories %}
+  <table class="avg-cal-table">
+    <thead><tr><th>Type</th><th>Avg cal</th><th>n</th></tr></thead>
+    <tbody>
+      {% for row in avg_calories %}
+      <tr>
+        <td>{{ row.activity_type.replace('_', ' ').title() }}</td>
+        <td class="mono">{{ row.avg_calories }}</td>
+        <td class="mono">{{ row.n }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <span class="compare">No activity data yet.</span>
+  {% endif %}
+</div>
+
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Recent activities</div>
+<div class="card">
+  {% if activities %}
+  <table class="avg-cal-table">
+    <thead><tr><th>Date</th><th>Type</th><th>Min</th><th>Cal</th></tr></thead>
+    <tbody>
+      {% for a in activities %}
+      <tr>
+        <td>{{ a.date }}</td>
+        <td>{{ (a.activity_type or '—').replace('_', ' ').title() }}</td>
+        <td class="mono">{{ a.duration_min | round | int if a.duration_min is not none else '—' }}</td>
+        <td class="mono">{{ a.calories | round | int if a.calories is not none else '—' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <span class="compare">No activities logged yet.</span>
+  {% endif %}
+</div>
+{% endblock %}

@@ -112,7 +112,12 @@ def sync_daily_metrics(client, conn, start: date, end: date) -> None:
         count += 1
 
     conn.commit()
-    db.set_last_synced(conn, "daily_metrics", end.isoformat())
+    # Only advance the checkpoint on a clean run - otherwise a partial
+    # failure would permanently skip re-fetching the days/items that didn't
+    # actually save (upserts are idempotent, so retrying successful ones too
+    # is harmless).
+    if error is None:
+        db.set_last_synced(conn, "daily_metrics", end.isoformat())
     db.log_sync(conn, "daily_metrics", "error" if error else "ok", error)
     logger.info("daily_metrics: synced %d day(s)", count)
 
@@ -146,7 +151,8 @@ def sync_activities(client, conn, start: date, end: date) -> None:
             error = str(exc)
 
     conn.commit()
-    db.set_last_synced(conn, "activities", end.isoformat())
+    if error is None:
+        db.set_last_synced(conn, "activities", end.isoformat())
     db.log_sync(conn, "activities", "error" if error else "ok", error)
     logger.info("activities: synced %d activities", count)
 
@@ -180,7 +186,8 @@ def sync_training_status(client, conn, start: date, end: date) -> None:
             count += 1
 
     conn.commit()
-    db.set_last_synced(conn, "training_status", end.isoformat())
+    if error is None:
+        db.set_last_synced(conn, "training_status", end.isoformat())
     db.log_sync(conn, "training_status", "error" if error else "ok", error)
     logger.info("training_status: synced %d day(s) with data", count)
 

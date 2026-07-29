@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from garmin_tracker import analytics, config, db
+from webapp import charts
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="webapp/static"), name="static")
@@ -62,11 +63,47 @@ def today(request: Request):
             request,
             "today.html",
             {
+                "active_page": "today",
                 "today_label": (today_date.strftime("%A, %B ") + str(today_date.day)).upper(),
                 "readiness": readiness,
                 "today_metrics": today_metrics,
                 "rails": rails,
                 "yesterday": yesterday,
+            },
+        )
+    finally:
+        conn.close()
+
+
+@app.get("/activity", response_class=HTMLResponse)
+def activity(request: Request):
+    conn = db.get_connection()
+    try:
+        weekly_calories = analytics.weekly_calories_by_bucket(conn)
+        weekday_cycle = analytics.weekday_step_cycle(conn)
+        heatmap = analytics.calendar_heatmap_data(conn)
+        avg_calories = analytics.avg_calories_per_session(conn)
+
+        activity_rows = db.fetch_all_dicts(
+            conn,
+            "SELECT date, activity_type, name, duration_min, calories FROM activities "
+            "ORDER BY date DESC LIMIT 100",
+        )
+
+        return templates.TemplateResponse(
+            request,
+            "activity.html",
+            {
+                "active_page": "activity",
+                "stacked_bar_svg": charts.stacked_bar_svg(weekly_calories),
+                "cycle_panels": [
+                    (name, charts.cycle_plot_svg(name, panel))
+                    for name, panel in weekday_cycle.items()
+                ],
+                "heatmap_svg": charts.heatmap_svg(heatmap),
+                "heatmap_month": heatmap["month"],
+                "avg_calories": avg_calories,
+                "activities": activity_rows,
             },
         )
     finally:

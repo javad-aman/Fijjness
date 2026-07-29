@@ -440,6 +440,128 @@ def yesterday_summary(conn, today: Optional[date] = None) -> dict:
     }
 
 
+# ---- Activity & Calories page (Phase 3) ----------------------------------
+
+BUCKETS = ["strength", "racquet", "cardio", "other"]
+_WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+
+
+def weekly_calories_by_bucket(conn, weeks: int = 8, today: Optional[date] = None) -> dict:
+    """Per-week active-calorie totals broken out by activity bucket, trailing
+    N weeks - the main calorie chart per spec §4 ("where is my output
+    actually coming from")."""
+    today = today or date.today()
+    this_week_start = today - timedelta(days=today.weekday())
+    start = this_week_start - timedelta(weeks=weeks - 1)
+
+    rows = db.fetch_all_dicts(
+        conn,
+        "SELECT date, bucket, calories FROM activities WHERE date >= ? AND date <= ? AND calories IS NOT NULL",
+        (start.isoformat(), today.isoformat()),
+    )
+
+    week_labels = []
+    data = {b: [] for b in BUCKETS}
+    cursor = start
+    for _ in range(weeks):
+        week_start = cursor
+        week_end = week_start + timedelta(days=6)
+        week_labels.append(week_start.isoformat())
+        for b in BUCKETS:
+            total = sum(
+                r["calories"] for r in rows
+                if r["bucket"] == b and week_start.isoformat() <= r["date"] <= week_end.isoformat()
+            )
+            data[b].append(round(total))
+        cursor += timedelta(weeks=1)
+
+    return {"week_labels": week_labels, "buckets": BUCKETS, "data": data}
+
+
+def weekday_step_cycle(conn, weeks: int = 12, today: Optional[date] = None) -> dict:
+    """Steps grouped by weekday, one panel per weekday showing that
+    weekday's series across the trailing N weeks with its own Theil-Sen
+    trend - surfaces things a normal time series structurally hides (e.g. a
+    specific weekday eroding over months), per spec §7.3."""
+    today = today or date.today()
+    start = today - timedelta(weeks=weeks)
+    rows = db.fetch_all_dicts(
+        conn,
+        "SELECT date, steps FROM daily_metrics WHERE date >= ? AND date <= ? AND steps IS NOT NULL",
+        (start.isoformat(), today.isoformat()),
+    )
+
+    panels = {i: [] for i in range(7)}
+    for r in rows:
+        d = _parse_date(r["date"])
+        panels[d.weekday()].append((d, r["steps"]))
+
+    result = {}
+    for i, name in enumerate(_WEEKDAY_NAMES):
+        series = sorted(panels[i])
+        trend_per_week = None
+        if len(series) >= 4:
+            xs = [(d - series[0][0]).days for d, _ in series]
+            ys = [v for _, v in series]
+            slope, *_rest = theilslopes(ys, xs, alpha=0.90)
+            trend_per_week = round(slope * 7, 1)
+        result[name] = {
+            "points": [{"date": d.isoformat(), "steps": v} for d, v in series],
+            "trend_per_week": trend_per_week,
+        }
+    return result
+
+
+def calendar_heatmap_data(conn, month: Optional[date] = None) -> dict:
+    """One entry per day in the month with its dominant activity bucket (or
+    None), for the month calendar heatmap. Strength/racquet outrank cardio
+    outranks other when a day has more than one activity."""
+    month = month or date.today().replace(day=1)
+    month_start = month.replace(day=1)
+    next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+    month_end = next_month - timedelta(days=1)
+
+    rows = db.fetch_all_dicts(
+        conn,
+        "SELECT date, bucket FROM activities WHERE date >= ? AND date <= ?",
+        (month_start.isoformat(), month_end.isoformat()),
+    )
+    priority = {"strength": 3, "racquet": 3, "cardio": 2, "other": 1}
+    by_date: dict[str, str] = {}
+    for r in rows:
+        cur = by_date.get(r["date"])
+        if cur is None or priority.get(r["bucket"], 0) > priority.get(cur, 0):
+            by_date[r["date"]] = r["bucket"]
+
+    days = []
+    d = month_start
+    while d <= month_end:
+        days.append({"date": d.isoformat(), "bucket": by_date.get(d.isoformat())})
+        d += timedelta(days=1)
+
+    return {"month": month_start.isoformat(), "days": days}
+
+
+def avg_calories_per_session(conn, days: int = 90, today: Optional[date] = None) -> list[dict]:
+    """Average calories by activity type, trailing N days - "what's a
+    typical tennis session vs. a typical lift worth", per spec §4."""
+    today = today or date.today()
+    start = today - timedelta(days=days)
+    rows = db.fetch_all_dicts(
+        conn,
+        "SELECT activity_type, calories FROM activities WHERE date >= ? AND date <= ? AND calories IS NOT NULL",
+        (start.isoformat(), today.isoformat()),
+    )
+    sums: dict[str, list[float]] = {}
+    for r in rows:
+        sums.setdefault(r["activity_type"], []).append(r["calories"])
+
+    return sorted(
+        [{"activity_type": t, "avg_calories": round(sum(v) / len(v)), "n": len(v)} for t, v in sums.items()],
+        key=lambda x: -x["avg_calories"],
+    )
+
+
 # ---- Full snapshot (the "debug JSON dump" for verification) --------------
 
 def build_snapshot(conn, goals: dict, today: Optional[date] = None) -> dict:
