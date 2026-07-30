@@ -46,7 +46,9 @@ GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD")
 TO_EMAIL = os.getenv("TO_EMAIL", GMAIL_ADDRESS)
 DASHBOARD_URL = os.getenv("DASHBOARD_URL", "")
 
-# Dashboard password gate (only enforced when set)
+# Dashboard password gate (only enforced when both are set - local dev
+# without them stays open)
+DASHBOARD_USERNAME = os.getenv("DASHBOARD_USERNAME")
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD")
 
 # Coach LLM (Phase 3 - declared now, unused until then)

@@ -1,11 +1,14 @@
 """FastAPI app serving the Today screen (Phase 2 - static, no LLM yet)."""
+import base64
 import json
+import secrets
 from datetime import date
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from garmin_tracker import analytics, config, db, stats_engine
 from webapp import charts
@@ -21,7 +24,35 @@ METRIC_LABELS = {
     "training_day": "training days",
 }
 
+class BasicAuthMiddleware(BaseHTTPMiddleware):
+    """Gates every request behind HTTP Basic Auth - only enforced when both
+    DASHBOARD_USERNAME and DASHBOARD_PASSWORD are set, so local dev without
+    them stays open. This is a single-user personal deployment, not a
+    multi-tenant app, so one shared credential pair is enough."""
+
+    async def dispatch(self, request: Request, call_next):
+        if not (config.DASHBOARD_USERNAME and config.DASHBOARD_PASSWORD):
+            return await call_next(request)
+
+        auth = request.headers.get("authorization")
+        if auth and auth.startswith("Basic "):
+            try:
+                decoded = base64.b64decode(auth[6:]).decode("utf-8")
+                username, _, password = decoded.partition(":")
+            except Exception:
+                username = password = ""
+            if secrets.compare_digest(username, config.DASHBOARD_USERNAME) and \
+                    secrets.compare_digest(password, config.DASHBOARD_PASSWORD):
+                return await call_next(request)
+
+        return HTMLResponse(
+            "Authentication required.", status_code=401,
+            headers={"WWW-Authenticate": "Basic realm=\"Fitness Dashboard\""},
+        )
+
+
 app = FastAPI()
+app.add_middleware(BasicAuthMiddleware)
 app.mount("/static", StaticFiles(directory="webapp/static"), name="static")
 templates = Jinja2Templates(directory="webapp/templates")
 

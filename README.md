@@ -1,7 +1,9 @@
 # Garmin Health Tracker
 
 Pulls your historical and ongoing Garmin Connect data into a local SQLite
-database, then visualizes it with a Streamlit dashboard.
+database, then visualizes it with a server-rendered FastAPI dashboard
+(Today / Activity / Insights), plus a daily/weekly LLM coach delivered by
+email.
 
 Uses the unofficial [`garminconnect`](https://pypi.org/project/garminconnect/)
 package (built on `garth` for OAuth) to talk to Garmin Connect.
@@ -77,15 +79,17 @@ cron job:
 **Dashboard:**
 
 ```bash
-streamlit run dashboard.py
+uvicorn webapp.main:app --reload --port 8010
 ```
 
-Shows:
-- Summary cards (workouts, avg sleep score, avg stress, avg resting HR) for a selectable time range
-- Workout frequency over time, stacked by activity type
-- Resting HR, sleep score, and stress trend lines
-- A calendar heatmap of workout days
-- A raw activities table for spot-checking
+Then open `http://127.0.0.1:8010`. Three pages:
+- **Today** — pace rails (steps/strength/racquet vs. goal), readiness gate, yesterday vs. 7-day average
+- **Activity** — weekly calories by activity type, steps-by-weekday cycle plot, training calendar heatmap, avg calories per session
+- **Insights** — findings from `stats_engine.py` (anomalies, the 5 pre-registered lagged hypotheses, training-day vs. rest-day comparison), each shown with its effect size and confidence interval, never a bare number
+
+Runs open (no login) locally. When `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD`
+are both set (as they are on the hosted deployment below), every page is
+gated behind HTTP Basic Auth.
 
 ## Data & storage
 
@@ -179,7 +183,8 @@ one for "Mail". Use that (not your normal password) as `GMAIL_APP_PASSWORD`.
   secrets ever get committed).
 - In the repo's Settings → Secrets and variables → Actions, add:
   `GARMIN_EMAIL`, `GARMIN_PASSWORD`, `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN`,
-  `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `TO_EMAIL`, `DASHBOARD_URL`.
+  `GMAIL_ADDRESS`, `GMAIL_APP_PASSWORD`, `TO_EMAIL`, `DASHBOARD_URL`,
+  `ANTHROPIC_API_KEY` (for the LLM coach - see below).
 - Also add `GARMIN_TOKENS_SEED_B64`: a one-time bootstrap so the first cloud
   run doesn't hit Garmin's MFA/bot-detection wall. Generate it from your
   already-working local session:
@@ -194,16 +199,25 @@ one for "Mail". Use that (not your normal password) as `GMAIL_APP_PASSWORD`.
   also be triggered manually from the Actions tab (`workflow_dispatch`) to
   test it immediately.
 
-**4. Streamlit Community Cloud (dashboard link)**
+**4. Render (dashboard hosting)**
 
-- Sign in at [share.streamlit.io](https://share.streamlit.io) with GitHub,
-  point it at this repo and `dashboard.py`.
-- In the app's Settings → Secrets, add: `TURSO_DATABASE_URL`,
-  `TURSO_AUTH_TOKEN`, `DASHBOARD_PASSWORD` (a password of your choice — the
-  dashboard shows a password prompt before any data loads whenever this is
-  set, and skips the gate entirely if it's unset).
-- You'll get a persistent `*.streamlit.app` URL that always shows current
-  data, refreshed daily by the GitHub Actions sync.
+The FastAPI app in `webapp/` is deployed via the `render.yaml` blueprint at
+the repo root — Render calls this "Blueprints" (Infrastructure as Code).
+
+- Sign up at [render.com](https://render.com) with GitHub.
+- Dashboard → **New** → **Blueprint** → pick this repo. Render reads
+  `render.yaml` and proposes one free web service (`fijjness-dashboard`).
+- When prompted for the env vars marked `sync: false` in `render.yaml`,
+  fill in: `TURSO_DATABASE_URL`, `TURSO_AUTH_TOKEN` (same values as your
+  GitHub secrets), and `DASHBOARD_USERNAME` / `DASHBOARD_PASSWORD` (pick any
+  username/password — this is what gates the public URL behind a browser
+  login prompt, since it's your personal health data on a public host).
+- Deploy. You'll get a persistent `https://fijjness-dashboard.onrender.com`
+  -style URL that always reflects current data (refreshed by the GitHub
+  Actions sync). Copy it into the `DASHBOARD_URL` GitHub Actions secret so
+  the coach email links to it.
+- Free-tier web services spin down after 15 minutes idle and take ~30-60s
+  to wake back up on the next visit — normal, not a bug.
 
 ## Notes & limitations
 
@@ -222,18 +236,25 @@ one for "Mail". Use that (not your normal password) as `GMAIL_APP_PASSWORD`.
 
 ```
 jfit/
-  .env.example          # template for credentials/config
+  .env.example            # template for credentials/config
   requirements.txt
+  render.yaml              # Render blueprint - hosts webapp/main.py
   garmin_tracker/
-    config.py           # loads .env
-    db.py                # DB schema + upsert helpers (local SQLite or Turso)
-    garmin_client.py     # auth, token caching, retry/backoff
-    models.py            # raw API payload -> DB row parsing
-    sync.py              # CLI: full backfill or incremental sync
-    goals.py             # editable step/sleep/workout targets
-    coach.py             # trend + goal-gap calculations
-    coach_email.py        # CLI: build + send the daily coach email
-  dashboard.py           # Streamlit app (password-gated when deployed)
-  .github/workflows/daily.yml   # scheduled cloud sync + email
-  data/garmin.db         # created on first sync (git-ignored, local mode only)
+    config.py              # loads .env
+    db.py                   # DB schema + upsert helpers (local SQLite or Turso)
+    garmin_client.py        # auth, token caching, retry/backoff
+    models.py               # raw API payload -> DB row parsing
+    sync.py                 # CLI: full backfill or incremental sync
+    analytics.py            # pace math, trend weight, readiness, load - all pure functions
+    stats_engine.py         # anomaly detection, lagged hypotheses, Hedges' g (Phase 5)
+    coach.py                # CLI: LLM daily brief / weekly review (stored in `briefs`)
+    coach_email.py           # CLI: email the stored brief/review
+  webapp/
+    main.py                 # FastAPI routes (Today / Activity / Insights)
+    charts.py                # hand-rolled server-rendered SVG charts
+    templates/, static/
+  scripts/
+    validate_stats_engine.py   # synthetic validation harness - must pass before real data
+  .github/workflows/daily.yml   # scheduled cloud sync + coach + email
+  data/garmin.db            # created on first sync (git-ignored, local mode only)
 ```
