@@ -171,7 +171,7 @@ def generate_daily_brief(conn, goals: dict, today: Optional[date] = None) -> dic
         "last_weekly_review": (recent_briefs(conn, "weekly", 1) or [None])[0],
     }, default=str)
 
-    body = _call_claude(DAILY_SYSTEM_PROMPT, user_content, max_tokens=1024)
+    body = _call_claude(DAILY_SYSTEM_PROMPT, user_content, max_tokens=2048)
     return _store_brief(conn, "daily", today, body, snapshot)
 
 
