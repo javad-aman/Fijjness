@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Insights — Fitness{% endblock %}
+
+{% block content %}
+{% if not has_any %}
+<div class="eyebrow" style="margin-bottom: 12px;">Insights</div>
+<div class="card">
+  <p class="compare" style="margin: 0;">
+    Not enough data yet to surface a reliable finding. This isn't a broken
+    page — the statistics engine only reports a relationship once it clears
+    a pre-registered significance bar (5 fixed hypotheses, corrected for
+    multiple comparisons) with at least 20 effective days of paired data.
+    Keep syncing and check back.
+  </p>
+</div>
+{% endif %}
+
+{% if lagged_cards %}
+<div class="eyebrow" style="margin-bottom: 12px;">What the data shows</div>
+{% for c in lagged_cards %}
+<div class="card">
+  <p style="margin: 0 0 8px;">{{ c.description }}</p>
+  {{ c.svg | safe }}
+  <p class="compare" style="margin: 8px 0 0;">
+    n={{ c.n_effective }} effective days · q={{ '%.3f' % c.q_value }} · correlational, not causal
+  </p>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if comparison_cards %}
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Training days vs. rest days</div>
+{% for c in comparison_cards %}
+<div class="card">
+  <p style="margin: 0 0 8px;">{{ c.description }}</p>
+  {{ c.svg | safe }}
+  <p class="compare" style="margin: 8px 0 0;">n={{ c.n_effective }} days per group (Hedges' g)</p>
+</div>
+{% endfor %}
+{% endif %}
+
+{% if anomaly_cards %}
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Recent anomalies</div>
+<div class="card">
+  {% for a in anomaly_cards %}
+  <div class="row">
+    <span>{{ a.description }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}

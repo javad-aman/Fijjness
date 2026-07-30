@@ -132,6 +132,35 @@ def cycle_plot_svg(weekday: str, panel: dict, width: int = 160, height: int = 90
     return "".join(parts)
 
 
+def effect_ci_svg(effect_size: float, ci_low: float, ci_high: float,
+                   width: int = 280, height: int = 48) -> str:
+    """A zero-centered effect-size + CI band - the uncertainty visual for
+    /insights findings, so a point estimate is never shown without its
+    interval (per spec: no false-precision single numbers)."""
+    pad = 14
+    plot_w = width - 2 * pad
+    max_abs = max(abs(ci_low), abs(ci_high), abs(effect_size), 0.05) * 1.25
+
+    def x_of(v: float) -> float:
+        return pad + plot_w / 2 + (v / max_abs) * (plot_w / 2)
+
+    zero_x = x_of(0)
+    mid_y = height / 2 + 4
+    lo_x, hi_x = x_of(ci_low), x_of(ci_high)
+    point_x = x_of(effect_size)
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+    parts.append(f"<line x1='{zero_x:.1f}' y1='8' x2='{zero_x:.1f}' y2='{height - 8}' stroke='{LINE}' stroke-width='1'/>")
+    parts.append(f"<line x1='{lo_x:.1f}' y1='{mid_y}' x2='{hi_x:.1f}' y2='{mid_y}' stroke='{NEUTRAL}' stroke-width='3' stroke-linecap='round'/>")
+    parts.append(f"<circle cx='{point_x:.1f}' cy='{mid_y}' r='4' fill='{TEXT}'/>")
+    parts.append(
+        f"<text x='{point_x:.1f}' y='{mid_y - 10}' {FONT} font-size='11' fill='{TEXT}' text-anchor='middle'>{effect_size:+.2f}</text>"
+    )
+    parts.append("</svg>")
+    return "".join(parts)
+
+
 def heatmap_svg(cal: dict, width: int = 560) -> str:
     """Month calendar heatmap colored by dominant activity bucket. A compact
     caption legend is used here (not per-cell direct labels) since day cells

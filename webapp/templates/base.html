@@ -14,6 +14,7 @@
     <nav class="topnav">
       <a href="/" class="{{ 'active' if active_page == 'today' else '' }}">Today</a>
       <a href="/activity" class="{{ 'active' if active_page == 'activity' else '' }}">Activity</a>
+      <a href="/insights" class="{{ 'active' if active_page == 'insights' else '' }}">Insights</a>
     </nav>
     {% block content %}{% endblock %}
   </div>

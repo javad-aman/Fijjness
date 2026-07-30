@@ -56,6 +56,12 @@ jobs:
           TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
         run: python -m garmin_tracker.sync
 
+      - name: Run statistics engine (anomalies, lagged hypotheses, findings)
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python -m garmin_tracker.stats_engine
+
       - name: Save Garmin session cache
         if: always()
         uses: actions/cache/save@v4
