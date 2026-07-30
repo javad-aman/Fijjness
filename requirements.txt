@@ -1,6 +1,7 @@
 garminconnect>=0.2.24
 garth>=0.4.44
 python-dotenv>=1.0.1
+tzdata>=2024.1
 tenacity>=9.0.0
 requests>=2.31.0
 PyYAML>=6.0

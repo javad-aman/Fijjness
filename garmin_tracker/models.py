@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
+
+from garmin_tracker.config import LOCAL_TZ
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +109,28 @@ def parse_daily_metrics(date_str: str, stats: dict, stress: dict | None,
                                  "avgWakingRespirationValue"),
         "spo2_avg": _get(spo2, "averageSpO2", "avgSpO2"),
     }
+
+
+def parse_intraday_steps(date_str: str, entries: Optional[list[dict]]) -> list[dict]:
+    """15-minute-interval entries (Garmin returns them GMT-timestamped, but
+    already windowed to the account's local day) -> one row per local hour
+    with that hour's step count, for the hourly pacing curve in analytics.py.
+    Entries whose converted local date doesn't match date_str (can happen at
+    the edges of Garmin's own day window) are dropped rather than misfiled
+    into the wrong day."""
+    hourly: dict[int, int] = {}
+    for e in entries or []:
+        start_gmt = e.get("startGMT")
+        steps = e.get("steps")
+        if not start_gmt or steps is None:
+            continue
+        dt_utc = datetime.fromisoformat(start_gmt).replace(tzinfo=ZoneInfo("UTC"))
+        dt_local = dt_utc.astimezone(LOCAL_TZ)
+        if dt_local.date().isoformat() != date_str:
+            continue
+        hourly[dt_local.hour] = hourly.get(dt_local.hour, 0) + steps
+
+    return [{"date": date_str, "hour": h, "steps": s} for h, s in sorted(hourly.items())]
 
 
 # Garmin's own account-level trainingLoad is unavailable for this account

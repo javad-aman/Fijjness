@@ -17,7 +17,13 @@ from garmin_tracker.garmin_client import call_with_retry, connect, pace
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-SOURCES = ["daily_metrics", "activities", "training_status"]
+SOURCES = ["daily_metrics", "activities", "training_status", "intraday_steps"]
+
+# intraday_steps is a new data type (Fix 6 of the dashboard/email consistency
+# pass) - it has no history yet, and per that fix's own scope it should
+# accumulate going forward rather than trigger a big historical backfill the
+# first time it runs, unlike the other sources' default full-year window.
+INITIAL_BACKFILL_DAYS_OVERRIDE = {"intraday_steps": 3}
 
 
 def daterange(start: date, end: date):
@@ -28,13 +34,14 @@ def daterange(start: date, end: date):
 
 
 def resolve_window(conn, source: str, full: bool, days: int) -> tuple[date, date]:
-    today = date.today()
+    today = config.local_today()
     if full:
         return today - timedelta(days=days), today
 
     last = db.get_last_synced(conn, source)
     if last is None:
-        return today - timedelta(days=days), today
+        initial_days = INITIAL_BACKFILL_DAYS_OVERRIDE.get(source, days)
+        return today - timedelta(days=initial_days), today
 
     last_date = datetime.strptime(last, "%Y-%m-%d").date()
     return last_date + timedelta(days=1), today
@@ -192,10 +199,38 @@ def sync_training_status(client, conn, start: date, end: date) -> None:
     logger.info("training_status: synced %d day(s) with data", count)
 
 
+def sync_intraday_steps(client, conn, start: date, end: date) -> None:
+    if start > end:
+        logger.info("intraday_steps: already up to date")
+        return
+
+    count = 0
+    error = None
+    for d in daterange(start, end):
+        d_str = d.isoformat()
+        try:
+            entries = call_with_retry(client.get_steps_data, d_str)
+        except Exception as exc:
+            logger.warning("intraday_steps: failed to fetch steps data for %s: %s", d_str, exc)
+            entries, error = [], str(exc)
+        pace()
+
+        for row in models.parse_intraday_steps(d_str, entries):
+            db.upsert(conn, "intraday_steps", row)
+        count += 1
+
+    conn.commit()
+    if error is None:
+        db.set_last_synced(conn, "intraday_steps", end.isoformat())
+    db.log_sync(conn, "intraday_steps", "error" if error else "ok", error)
+    logger.info("intraday_steps: synced %d day(s)", count)
+
+
 SYNC_FUNCS = {
     "daily_metrics": sync_daily_metrics,
     "activities": sync_activities,
     "training_status": sync_training_status,
+    "intraday_steps": sync_intraday_steps,
 }
 
 

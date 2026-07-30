@@ -2,7 +2,6 @@
 import base64
 import json
 import secrets
-from datetime import date
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse
@@ -57,11 +56,15 @@ app.mount("/static", StaticFiles(directory="webapp/static"), name="static")
 templates = Jinja2Templates(directory="webapp/templates")
 
 
-def _rail(label: str, pace: dict, unit: str = "") -> dict:
+def _rail(label: str, pace: dict, unit: str = "", not_synced: bool = False) -> dict:
     target = pace["target"] or 0
     actual = pace["actual"]
     expected = pace["expected_by_now"]
-    fill_pct = min((actual / target) * 100, 100) if target else 0
+    # A missing actual (not yet synced) is never rendered as a real zero -
+    # the fill bar shows empty and the template shows "not yet synced"
+    # instead of a fabricated number.
+    not_synced = not_synced or actual is None
+    fill_pct = min((actual / target) * 100, 100) if target and actual is not None else 0
     tick_pct = min((expected / target) * 100, 100) if target and expected is not None else 0
     return {
         "label": label,
@@ -71,6 +74,7 @@ def _rail(label: str, pace: dict, unit: str = "") -> dict:
         "fill_pct": round(fill_pct, 1),
         "tick_pct": round(tick_pct, 1),
         "on_pace": pace["on_pace"],
+        "not_synced": not_synced,
     }
 
 
@@ -78,28 +82,24 @@ def _rail(label: str, pace: dict, unit: str = "") -> dict:
 def today(request: Request):
     conn = db.get_connection()
     try:
-        goals = config.GOALS
-        today_date = date.today()
+        today_date = config.local_today()
 
-        readiness = analytics.readiness_today(conn, today_date)
-        steps = analytics.steps_pace(conn, goals, today_date)
-        strength = analytics.strength_pace(conn, goals, today_date)
-        racquet = analytics.racquet_pace(conn, goals, today_date)
-        yesterday = analytics.yesterday_summary(conn, today_date)
+        # Single source of truth: everything below reads from this one dict.
+        # No separate aggregate query - see analytics.build_snapshot's
+        # docstring for why.
+        snapshot = analytics.build_snapshot(conn, config.GOALS, today_date)
+
+        yesterday = snapshot["yesterday"]
         yesterday["activity_labels"] = [
             f"{(a['type'] or 'activity').replace('_', ' ').title()} {round(a['duration_min'])}min"
             for a in yesterday["activities"]
         ]
 
-        today_rows = db.fetch_all_dicts(
-            conn, "SELECT * FROM daily_metrics WHERE date = ?", (today_date.isoformat(),)
-        )
-        today_metrics = today_rows[0] if today_rows else {}
-
+        steps_stale = snapshot["sync_status"]["sources"]["daily_metrics"]["stale"]
         rails = [
-            _rail("Steps · Today", steps),
-            _rail("Strength · This Month", strength, unit=" sessions"),
-            _rail("Racquet · This Week", racquet, unit=" sessions"),
+            _rail("Steps · Today", snapshot["steps_pace"], not_synced=steps_stale),
+            _rail("Strength · This Month", snapshot["strength_pace"], unit=" sessions"),
+            _rail("Racquet · This Week", snapshot["racquet_pace"], unit=" sessions"),
         ]
 
         return templates.TemplateResponse(
@@ -108,8 +108,7 @@ def today(request: Request):
             {
                 "active_page": "today",
                 "today_label": (today_date.strftime("%A, %B ") + str(today_date.day)).upper(),
-                "readiness": readiness,
-                "today_metrics": today_metrics,
+                "readiness": snapshot["readiness"],
                 "rails": rails,
                 "yesterday": yesterday,
             },

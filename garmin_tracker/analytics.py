@@ -7,12 +7,12 @@ happens, once.
 """
 from __future__ import annotations
 
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
 from scipy.stats import theilslopes
 
-from garmin_tracker import db
+from garmin_tracker import config, db
 
 
 def _parse_date(d) -> date:
@@ -23,15 +23,28 @@ def _parse_date(d) -> date:
 
 # ---- Generic pace math -------------------------------------------------
 
-def pace_status(target: float, actual: float, elapsed_period: float,
+def pace_status(target: float, actual: Optional[float], elapsed_period: float,
                 total_period: float, remaining_units: Optional[float] = None) -> dict:
     """target/actual over a period (e.g. sessions this month). Returns the
-    expected-by-now value, delta, and the rate still required to hit target."""
+    expected-by-now value, delta, and the rate still required to hit target.
+
+    `actual=None` means genuinely not-yet-synced, not zero - it must never
+    be substituted with 0 by a caller. expected_by_now can still be computed
+    (it only depends on target/elapsed/total), but delta/on_pace/required_rate
+    all stay None rather than doing arithmetic against a fabricated number."""
     if total_period <= 0:
         return {"target": target, "actual": actual, "expected_by_now": None,
                 "delta": None, "required_rate": None, "on_pace": None}
 
     expected_by_now = target * (elapsed_period / total_period)
+
+    if actual is None:
+        return {
+            "target": target, "actual": None,
+            "expected_by_now": round(expected_by_now, 2),
+            "delta": None, "required_rate": None, "on_pace": None,
+        }
+
     delta = actual - expected_by_now
 
     if remaining_units is None:
@@ -50,6 +63,23 @@ def pace_status(target: float, actual: float, elapsed_period: float,
         "required_rate": round(required_rate, 2) if required_rate not in (float("inf"),) else None,
         "on_pace": delta >= 0,
     }
+
+
+def _round_to_int_fields(result: dict, *fields: str) -> dict:
+    """Session counts are discrete - "expected 11.23 sessions" isn't a real
+    quantity a human would say. Applied by the specific caller (not inside
+    pace_status itself, which is shared by non-session quantities too)."""
+    for f in fields:
+        if result.get(f) is not None:
+            result[f] = round(result[f])
+    return result
+
+
+def _round_to_nearest_fields(result: dict, nearest: int, *fields: str) -> dict:
+    for f in fields:
+        if result.get(f) is not None:
+            result[f] = round(result[f] / nearest) * nearest
+    return result
 
 
 def _count_activities(conn, start: date, end: date, bucket: str) -> int:
@@ -71,7 +101,7 @@ def _activity_dates(conn, start: date, end: date, bucket: str) -> list[date]:
 
 
 def strength_pace(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     month_start = today.replace(day=1)
     next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
     month_end = next_month - timedelta(days=1)
@@ -84,13 +114,14 @@ def strength_pace(conn, goals: dict, today: Optional[date] = None) -> dict:
     target = goals["strength"]["monthly_sessions"]
 
     result = pace_status(target, actual, elapsed_period, total_period, remaining_units)
+    _round_to_int_fields(result, "expected_by_now", "delta", "required_rate")
     result.update({"period": "month", "period_start": month_start.isoformat(),
                    "period_end": month_end.isoformat()})
     return result
 
 
 def racquet_pace(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     week_start = today - timedelta(days=today.weekday())  # Monday
     week_end = week_start + timedelta(days=6)
 
@@ -102,26 +133,85 @@ def racquet_pace(conn, goals: dict, today: Optional[date] = None) -> dict:
     target = goals["racquet"]["weekly_sessions"]
 
     result = pace_status(target, actual, elapsed_period, total_period, remaining_units)
+    _round_to_int_fields(result, "expected_by_now", "delta", "required_rate")
     result.update({"period": "week", "period_start": week_start.isoformat(),
                    "period_end": week_end.isoformat()})
     return result
 
 
+def hourly_step_curve(conn, today: date, days: int = 90) -> list[float]:
+    """Trailing-N-day cumulative fraction of a day's steps typically
+    accumulated by the end of each local hour (0-23) - nobody accumulates
+    steps linearly from midnight, so this replaces the old flat-fraction-of-
+    clock-time estimate. Each day is normalized against its OWN intraday
+    total (not daily_metrics.steps) - Garmin's intraday endpoint and its
+    daily-summary endpoint don't always agree on the day's total, confirmed
+    against real data, so self-normalizing avoids that cross-endpoint
+    mismatch entirely; only the accumulation *shape* is used here. Returns
+    [] if there isn't at least a few days of intraday history yet."""
+    start = today - timedelta(days=days)
+    end = today - timedelta(days=1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, hour, steps FROM intraday_steps WHERE date >= ? AND date <= ?",
+        (start.isoformat(), end.isoformat()),
+    )
+    by_date: dict[str, dict[int, int]] = {}
+    for r in rows:
+        by_date.setdefault(r["date"], {})[r["hour"]] = r["steps"]
+
+    cumulative_fractions: dict[int, list[float]] = {h: [] for h in range(24)}
+    for hourly in by_date.values():
+        day_total = sum(hourly.values())
+        if day_total <= 0:
+            continue
+        cumulative = 0
+        for h in range(24):
+            cumulative += hourly.get(h, 0)
+            cumulative_fractions[h].append(cumulative / day_total)
+
+    if not any(cumulative_fractions.values()):
+        return []
+
+    curve = []
+    prev = 0.0
+    for h in range(24):
+        vals = cumulative_fractions[h]
+        frac = (sum(vals) / len(vals)) if vals else prev
+        curve.append(frac)
+        prev = frac
+    for i in range(1, 24):  # guard against float noise making it non-monotonic
+        curve[i] = max(curve[i], curve[i - 1])
+    return curve
+
+
 def steps_pace(conn, goals: dict, today: Optional[date] = None) -> dict:
-    """Daily step pace. NOTE: intraday (hour-of-day) pacing from the spec
-    ("expected_by_now scales against the user's own learned hourly
-    distribution") needs Garmin's intraday steps endpoint, which isn't
-    synced yet (only a daily total is stored in daily_metrics). Falls back
-    to a flat fraction-of-day-elapsed estimate until that's wired up."""
-    today = today or date.today()
+    """Daily step pace. expected_by_now scales against the user's own
+    learned hourly accumulation curve (see hourly_step_curve) rather than a
+    flat fraction of clock time elapsed - falls back to the flat estimate
+    only until enough intraday history has accumulated."""
+    today = today or config.local_today()
     row = db.fetch_all_dicts(conn, "SELECT steps FROM daily_metrics WHERE date = ?", (today.isoformat(),))
-    actual = row[0]["steps"] if row and row[0]["steps"] is not None else 0
+    # None (not 0) when today hasn't synced yet, or synced without a steps
+    # reading - a real absence of data, not a real zero step count.
+    actual = row[0]["steps"] if row else None
     target = goals["steps"]["daily_target"]
 
-    now = datetime.now()
-    fraction_of_day = (now.hour * 60 + now.minute) / (24 * 60)
-    result = pace_status(target, actual, fraction_of_day, 1.0, remaining_units=(1.0 - fraction_of_day))
-    result["method"] = "flat_fraction_of_day (intraday learned curve not yet available)"
+    now = datetime.now(config.LOCAL_TZ)
+    flat_fraction = (now.hour * 60 + now.minute) / (24 * 60)
+
+    curve = hourly_step_curve(conn, today)
+    if curve:
+        h0 = now.hour
+        within_hour = now.minute / 60
+        prev_cum = curve[h0 - 1] if h0 > 0 else 0.0
+        fraction = prev_cum + (curve[h0] - prev_cum) * within_hour
+        method = "hourly_learned_curve (trailing 90d intraday)"
+    else:
+        fraction = flat_fraction
+        method = "flat_fraction_of_day (insufficient intraday history yet)"
+
+    result = pace_status(target, actual, fraction, 1.0, remaining_units=(1.0 - fraction))
+    result["method"] = method
     return result
 
 
@@ -138,7 +228,7 @@ def _ewma(values: list[float], span: int = 7) -> list[float]:
 
 
 def next_checkpoint(checkpoints: list[dict], today: Optional[date] = None) -> Optional[dict]:
-    today = today or date.today()
+    today = today or config.local_today()
     upcoming = [c for c in checkpoints if _parse_date(c["date"]) >= today]
     if not upcoming:
         return None
@@ -152,7 +242,7 @@ def trend_weight(conn, goals: dict, today: Optional[date] = None) -> dict:
     lone subject produces - over the trailing 21 days, with a 90% CI on the
     slope propagated into an earliest/latest projected-checkpoint-date band
     rather than a single false-precision date."""
-    today = today or date.today()
+    today = today or config.local_today()
     start = today - timedelta(days=180)  # plenty of history for a 7-day EWMA + 21-day slope
     rows = db.fetch_all_dicts(
         conn,
@@ -180,8 +270,8 @@ def trend_weight(conn, goals: dict, today: Optional[date] = None) -> dict:
         xs = [(_parse_date(d) - _parse_date(trailing[0][0])).days for d, _ in trailing]
         ys = [e for _, e in trailing]
         slope, intercept, low_slope, high_slope = theilslopes(ys, xs, alpha=0.90)
-        rate_per_week = round(slope * 7, 3)
-        rate_ci = (round(low_slope * 7, 3), round(high_slope * 7, 3))
+        rate_per_week = round(slope * 7, 1)
+        rate_ci = (round(low_slope * 7, 1), round(high_slope * 7, 1))
 
     checkpoint = next_checkpoint(goals["weight"]["checkpoints"], today)
     projected_range = None
@@ -191,7 +281,7 @@ def trend_weight(conn, goals: dict, today: Optional[date] = None) -> dict:
         checkpoint_date = _parse_date(checkpoint["date"])
         weeks_to_checkpoint = max((checkpoint_date - today).days / 7.0, 0)
         if weeks_to_checkpoint > 0:
-            required_rate = round((target - current_trend) / weeks_to_checkpoint, 3)
+            required_rate = round((target - current_trend) / weeks_to_checkpoint, 1)
 
         if rate_ci is not None:
             # Faster of the two CI bounds -> earliest arrival; slower -> latest
@@ -218,7 +308,7 @@ def trend_weight(conn, goals: dict, today: Optional[date] = None) -> dict:
 # ---- Consistency / burst detection --------------------------------------
 
 def front_load_index(conn, bucket: str = "strength", today: Optional[date] = None) -> Optional[float]:
-    today = today or date.today()
+    today = today or config.local_today()
     month_start = today.replace(day=1)
     next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
     month_end = next_month - timedelta(days=1)
@@ -233,7 +323,7 @@ def front_load_index(conn, bucket: str = "strength", today: Optional[date] = Non
 
 def burst_pattern(conn, bucket: str = "strength", weeks: int = 6,
                    today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     start = today - timedelta(weeks=weeks)
     sessions = _activity_dates(conn, start, today, bucket)
 
@@ -269,7 +359,7 @@ def _sum_load(conn, start: date, end: date) -> float:
 
 
 def acute_chronic_load_ratio(conn, today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     acute = _sum_load(conn, today - timedelta(days=6), today)
     chronic_total = _sum_load(conn, today - timedelta(days=27), today)
     chronic_weekly_avg = round(chronic_total / 4, 1) if chronic_total else 0.0
@@ -294,7 +384,7 @@ def _sum_duration_minutes(conn, start: date, end: date, bucket: str) -> float:
 
 
 def racquet_minutes_jump(conn, today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     week_start = today - timedelta(days=today.weekday())
     prev_week_start = week_start - timedelta(days=7)
     prev_week_end = week_start - timedelta(days=1)
@@ -311,13 +401,110 @@ def racquet_minutes_jump(conn, today: Optional[date] = None) -> dict:
     }
 
 
+def weekly_review_window(today: Optional[date] = None) -> dict:
+    """The last 7 COMPLETE days - today doesn't count as complete yet. This
+    is always a fixed rolling window regardless of what day-of-week the
+    weekly review actually runs on, and gets stamped into the review's own
+    header so an off-schedule run is self-documenting rather than silently
+    mislabeled as "this week"."""
+    today = today or config.local_today()
+    end = today - timedelta(days=1)
+    start = end - timedelta(days=6)
+    return {"start": start.isoformat(), "end": end.isoformat()}
+
+
+def rolling_racquet_minutes_jump(conn, today: Optional[date] = None) -> dict:
+    """Same signal as racquet_minutes_jump, but always two full, equal-length
+    7-day windows (last 7 complete days vs. the 7 before that) rather than
+    calendar Monday-Sunday weeks. racquet_minutes_jump's "this week so far"
+    is fine for a daily running check-in, but comparing a partial current
+    week against a complete prior week is exactly what produced a false
+    "racquet minutes down 76%" when the weekly review ran on a Wednesday -
+    the weekly review must use this version, never the calendar-week one."""
+    window = weekly_review_window(today)
+    end = _parse_date(window["end"])
+    start = _parse_date(window["start"])
+    prior_end = start - timedelta(days=1)
+    prior_start = prior_end - timedelta(days=6)
+
+    this_period = _sum_duration_minutes(conn, start, end, "racquet")
+    prior_period = _sum_duration_minutes(conn, prior_start, prior_end, "racquet")
+    pct_change = round((this_period - prior_period) / prior_period, 2) if prior_period else None
+
+    return {
+        "period_start": start.isoformat(),
+        "period_end": end.isoformat(),
+        "this_period_minutes": this_period,
+        "prior_period_start": prior_start.isoformat(),
+        "prior_period_end": prior_end.isoformat(),
+        "prior_period_minutes": prior_period,
+        "pct_change": pct_change,
+        "flag_jump": pct_change is not None and pct_change > 0.40,
+    }
+
+
+# ---- Sync freshness --------------------------------------------------------
+
+SYNC_SOURCES = ("daily_metrics", "activities", "training_status")
+STALE_AFTER_HOURS = 6  # sync runs twice daily (~04:30/11:00 Central); 6h covers
+                       # that cadence plus slack for one missed run
+
+
+def sync_status(conn, now: Optional[datetime] = None) -> dict:
+    """Per-source last-sync time and staleness, computed once here so the
+    dashboard, the email, and the pre-send gate all agree on what "fresh"
+    means - none of them may re-derive this from sync_log independently."""
+    now = now or datetime.now(timezone.utc)
+    sources = {}
+    any_stale = False
+    for source in SYNC_SOURCES:
+        rows = db.fetch_all_dicts(
+            conn,
+            "SELECT timestamp, status FROM sync_log WHERE source = ? ORDER BY timestamp DESC LIMIT 1",
+            (source,),
+        )
+        if not rows:
+            sources[source] = {"last_sync_at": None, "status": "never", "stale": True}
+            any_stale = True
+            continue
+        last_time = datetime.fromisoformat(rows[0]["timestamp"])
+        stale = rows[0]["status"] != "ok" or (now - last_time) > timedelta(hours=STALE_AFTER_HOURS)
+        sources[source] = {
+            "last_sync_at": rows[0]["timestamp"],
+            "status": rows[0]["status"],
+            "stale": stale,
+        }
+        any_stale = any_stale or stale
+
+    return {"sources": sources, "any_stale": any_stale}
+
+
 # ---- Readiness gate -------------------------------------------------------
 
 def readiness(body_battery_wake: Optional[int], hrv_status: Optional[str],
               sleep_score: Optional[int], resting_hr: Optional[int],
               baseline_resting_hr_30d: Optional[float]) -> dict:
-    """Simple, transparent rule-based classification - green/amber/red -
-    deliberately not a black-box model, so the reasoning is always visible."""
+    """Simple, transparent rule-based classification - green/amber/red/unknown
+    - deliberately not a black-box model, so the reasoning is always visible.
+
+    Body Battery and sleep score are required inputs: missing either one
+    means there isn't enough signal to call it green (or red/amber), so the
+    state is `unknown` rather than guessing. Green specifically requires
+    present, in-range inputs - it is never the default."""
+    if body_battery_wake is None or sleep_score is None:
+        missing = [
+            name for name, v in (("body_battery_wake", body_battery_wake), ("sleep_score", sleep_score))
+            if v is None
+        ]
+        return {
+            "state": "unknown",
+            "reasons": [f"missing: {', '.join(missing)}"],
+            "body_battery_wake": body_battery_wake,
+            "sleep_score": sleep_score,
+            "resting_hr": resting_hr,
+            "hrv_status": hrv_status,
+        }
+
     red = amber = 0
     reasons = []
 
@@ -325,21 +512,19 @@ def readiness(body_battery_wake: Optional[int], hrv_status: Optional[str],
         red += 1
         reasons.append(f"hrv_status={hrv_status}")
 
-    if sleep_score is not None:
-        if sleep_score < 60:
-            red += 1
-            reasons.append(f"sleep_score={sleep_score} (<60)")
-        elif sleep_score < 75:
-            amber += 1
-            reasons.append(f"sleep_score={sleep_score} (<75)")
+    if sleep_score < 60:
+        red += 1
+        reasons.append(f"sleep_score={sleep_score} (<60)")
+    elif sleep_score < 75:
+        amber += 1
+        reasons.append(f"sleep_score={sleep_score} (<75)")
 
-    if body_battery_wake is not None:
-        if body_battery_wake < 30:
-            red += 1
-            reasons.append(f"body_battery_wake={body_battery_wake} (<30)")
-        elif body_battery_wake < 50:
-            amber += 1
-            reasons.append(f"body_battery_wake={body_battery_wake} (<50)")
+    if body_battery_wake < 30:
+        red += 1
+        reasons.append(f"body_battery_wake={body_battery_wake} (<30)")
+    elif body_battery_wake < 50:
+        amber += 1
+        reasons.append(f"body_battery_wake={body_battery_wake} (<50)")
 
     if resting_hr is not None and baseline_resting_hr_30d is not None:
         diff = resting_hr - baseline_resting_hr_30d
@@ -357,11 +542,21 @@ def readiness(body_battery_wake: Optional[int], hrv_status: Optional[str],
     else:
         state = "green"
 
-    return {"state": state, "reasons": reasons}
+    return {
+        "state": state,
+        "reasons": reasons,
+        # Raw inputs the decision was made from, carried through so callers
+        # (dashboard template, email) read them from this one dict instead
+        # of re-querying daily_metrics themselves.
+        "body_battery_wake": body_battery_wake,
+        "sleep_score": sleep_score,
+        "resting_hr": resting_hr,
+        "hrv_status": hrv_status,
+    }
 
 
 def readiness_today(conn, today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     row = db.fetch_all_dicts(
         conn, "SELECT * FROM daily_metrics WHERE date = ?", (today.isoformat(),)
     )
@@ -410,7 +605,7 @@ def yesterday_summary(conn, today: Optional[date] = None) -> dict:
     """Steps, activity, calories, sleep - each vs. its trailing 7-day average,
     per spec §7.1.4. ("Activity" has no average - it's just what happened,
     if anything.)"""
-    today = today or date.today()
+    today = today or config.local_today()
     yesterday = today - timedelta(days=1)
     rows = db.fetch_all_dicts(conn, "SELECT * FROM daily_metrics WHERE date = ?", (yesterday.isoformat(),))
     row = rows[0] if rows else {}
@@ -450,7 +645,7 @@ def weekly_calories_by_bucket(conn, weeks: int = 8, today: Optional[date] = None
     """Per-week active-calorie totals broken out by activity bucket, trailing
     N weeks - the main calorie chart per spec §4 ("where is my output
     actually coming from")."""
-    today = today or date.today()
+    today = today or config.local_today()
     this_week_start = today - timedelta(days=today.weekday())
     start = this_week_start - timedelta(weeks=weeks - 1)
 
@@ -483,7 +678,7 @@ def weekday_step_cycle(conn, weeks: int = 12, today: Optional[date] = None) -> d
     weekday's series across the trailing N weeks with its own Theil-Sen
     trend - surfaces things a normal time series structurally hides (e.g. a
     specific weekday eroding over months), per spec §7.3."""
-    today = today or date.today()
+    today = today or config.local_today()
     start = today - timedelta(weeks=weeks)
     rows = db.fetch_all_dicts(
         conn,
@@ -516,7 +711,7 @@ def calendar_heatmap_data(conn, month: Optional[date] = None) -> dict:
     """One entry per day in the month with its dominant activity bucket (or
     None), for the month calendar heatmap. Strength/racquet outrank cardio
     outranks other when a day has more than one activity."""
-    month = month or date.today().replace(day=1)
+    month = month or config.local_today().replace(day=1)
     month_start = month.replace(day=1)
     next_month = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1)
     month_end = next_month - timedelta(days=1)
@@ -545,7 +740,7 @@ def calendar_heatmap_data(conn, month: Optional[date] = None) -> dict:
 def avg_calories_per_session(conn, days: int = 90, today: Optional[date] = None) -> list[dict]:
     """Average calories by activity type, trailing N days - "what's a
     typical tennis session vs. a typical lift worth", per spec §4."""
-    today = today or date.today()
+    today = today or config.local_today()
     start = today - timedelta(days=days)
     rows = db.fetch_all_dicts(
         conn,
@@ -562,12 +757,17 @@ def avg_calories_per_session(conn, days: int = 90, today: Optional[date] = None)
     )
 
 
-# ---- Full snapshot (the "debug JSON dump" for verification) --------------
+# ---- Full snapshot (the single source of truth for the dashboard, the
+# daily email, and the weekly review - none of those may compute their own
+# aggregate query; they all read this dict) --------------------------------
 
 def build_snapshot(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or date.today()
-    return {
-        "date": today.isoformat(),
+    """The only function that computes report-facing metrics. `snapshot_date`
+    is the one date every consumer must render and can assert against -
+    never re-derived, never inferred from "the latest row in the table"."""
+    today = today or config.local_today()
+    snapshot = {
+        "snapshot_date": today.isoformat(),
         "steps_pace": steps_pace(conn, goals, today),
         "strength_pace": strength_pace(conn, goals, today),
         "racquet_pace": racquet_pace(conn, goals, today),
@@ -578,4 +778,33 @@ def build_snapshot(conn, goals: dict, today: Optional[date] = None) -> dict:
         "racquet_minutes_jump": racquet_minutes_jump(conn, today),
         "readiness": readiness_today(conn, today),
         "yesterday": yesterday_summary(conn, today),
+        "sync_status": sync_status(conn),
     }
+
+    # Canary for the date-boundary bug class (steps queried for "today" and
+    # "yesterday" silently landing on the same underlying row): a real
+    # human being able to walk exactly as many steps two days running is
+    # astronomically unlikely, so equal-and-nonzero means a query resolved
+    # the wrong date, not a coincidence. None ("not yet synced") is a
+    # distinct state from 0 and never trips this - only two genuinely equal,
+    # nonzero, non-missing readings do.
+    today_steps = snapshot["steps_pace"]["actual"]
+    yesterday_steps = snapshot["yesterday"]["steps"]
+    collision = (
+        today_steps is not None and yesterday_steps is not None
+        and today_steps != 0 and today_steps == yesterday_steps
+    )
+    assert not collision, (
+        f"snapshot_date={snapshot['snapshot_date']}: today's steps ({today_steps}) and "
+        f"yesterday's steps ({yesterday_steps}) are identical and nonzero - "
+        "one of the two queries resolved the wrong date."
+    )
+
+    # Rounded for display/citation only, after the exact-value assertion
+    # above has already run - steps carry enough device noise that showing
+    # the raw count implies false precision.
+    _round_to_nearest_fields(
+        snapshot["steps_pace"], 100, "actual", "expected_by_now", "delta", "required_rate"
+    )
+
+    return snapshot

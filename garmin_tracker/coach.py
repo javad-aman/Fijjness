@@ -47,7 +47,10 @@ Hard constraints:
   especially for strength training, are unreliable. Use trend weight rate as
   the measure of energy balance.
 - Do not assume any weekly schedule. Racquet sessions happen when they happen.
-- Respect the readiness gate: if red, do not prescribe hard work.
+- Respect the readiness gate: if red, do not prescribe hard work. If readiness
+  is "unknown" (Body Battery or sleep score missing), do not recommend more
+  or less intensity in either direction - say plainly that readiness data is
+  missing rather than reasoning from a state that isn't actually known.
 - You may only reference relationships present in the findings array. Absence
   means insufficient evidence, not evidence of absence - never say "no effect."
 - Correlational findings are associations, not causes. Word them that way.
@@ -62,11 +65,19 @@ does not apply. Produce exactly these five sections, in this order:
 3. What didn't, with the likely cause from the data
 4. Next week's session plan - count and type, no day assignments unless the
    user's own history supports one
-5. One goal adjustment if the data says a target is miscalibrated"""
+5. One goal adjustment if the data says a target is miscalibrated
+
+State the exact date range from review_window (start to end) at the top of
+the review, verbatim from the snapshot. This is always the last 7 complete
+days, not necessarily the calendar week - if this review is running off its
+normal schedule, the date range makes that explicit instead of silently
+mislabeling a partial period as "this week". Use racquet_minutes_jump's
+period_start/period_end/prior_period_start/prior_period_end (not
+"this week"/"last week") when describing that comparison."""
 
 
 def build_metrics_snapshot(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     snapshot = analytics.build_snapshot(conn, goals, today)
     snapshot["weekly_calories_by_bucket"] = analytics.weekly_calories_by_bucket(conn, today=today)
     snapshot["avg_calories_per_session"] = analytics.avg_calories_per_session(conn, today=today)
@@ -78,6 +89,18 @@ def build_metrics_snapshot(conn, goals: dict, today: Optional[date] = None) -> d
         "SELECT predictor, outcome, lag_days, effect_size, ci_low, ci_high, q_value, n_effective "
         "FROM findings WHERE status = 'surfaced' ORDER BY computed_at DESC",
     )
+    return snapshot
+
+
+def build_weekly_review_snapshot(conn, goals: dict, today: Optional[date] = None) -> dict:
+    """Same as build_metrics_snapshot, but racquet_minutes_jump is replaced
+    with the rolling (always-two-complete-weeks) version and a review_window
+    is stamped in - the weekly review must never use the calendar-week
+    "this week so far" comparison the daily brief uses."""
+    today = today or config.local_today()
+    snapshot = build_metrics_snapshot(conn, goals, today)
+    snapshot["review_window"] = analytics.weekly_review_window(today)
+    snapshot["racquet_minutes_jump"] = analytics.rolling_racquet_minutes_jump(conn, today)
     return snapshot
 
 
@@ -140,7 +163,7 @@ def _call_claude(system_prompt: str, user_content: str, max_tokens: int) -> str:
 
 
 def generate_daily_brief(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or date.today()
+    today = today or config.local_today()
     snapshot = build_metrics_snapshot(conn, goals, today)
     user_content = json.dumps({
         "metrics_snapshot": snapshot,
@@ -153,22 +176,20 @@ def generate_daily_brief(conn, goals: dict, today: Optional[date] = None) -> dic
 
 
 def generate_weekly_review(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or date.today()
-    snapshot = build_metrics_snapshot(conn, goals, today)
+    today = today or config.local_today()
+    snapshot = build_weekly_review_snapshot(conn, goals, today)
     user_content = json.dumps({
         "metrics_snapshot": snapshot,
         "last_7_daily_briefs": recent_briefs(conn, "daily", 7),
         "last_weekly_review": (recent_briefs(conn, "weekly", 1) or [None])[0],
     }, default=str)
 
-    body = _call_claude(WEEKLY_SYSTEM_PROMPT, user_content, max_tokens=4096)
+    body = _call_claude(WEEKLY_SYSTEM_PROMPT, user_content, max_tokens=8192)
     return _store_brief(conn, "weekly", today, body, snapshot)
 
 
 def main():
     import argparse
-
-    from garmin_tracker import config
 
     parser = argparse.ArgumentParser(description="Generate and store a coach brief/review.")
     parser.add_argument("--kind", choices=["daily", "weekly"], default="daily")

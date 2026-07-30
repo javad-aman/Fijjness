@@ -1,0 +1,30 @@
+name: Regression checks
+
+# Runs on every push to main - the closest thing to "before every deploy"
+# this repo has, since Render auto-deploys straight from a push. This
+# surfaces a failure in the Actions tab; it does not block Render's deploy
+# webhook (that would need a branch-protection required-check setup, which
+# hasn't been asked for).
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+
+      - name: Validate statistics engine against synthetic data
+        run: python scripts/validate_stats_engine.py
+
+      - name: Validate dashboard/email/direct-SQL consistency
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python scripts/validate_dashboard_email_consistency.py

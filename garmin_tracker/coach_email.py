@@ -13,22 +13,36 @@ from __future__ import annotations
 
 import argparse
 import html
+import json
 import re
 import smtplib
 import ssl
-from datetime import datetime, timedelta, timezone
+from datetime import date, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from typing import Optional
 
-from garmin_tracker import config, db
+from garmin_tracker import analytics, config, db
 
 GMAIL_SMTP_HOST = "smtp.gmail.com"
 GMAIL_SMTP_PORT = 587
 
-# How stale a source's last successful sync can be before the email flags it
-# rather than coaching on old numbers. Sync runs twice daily (~04:30/11:00);
-# 30h covers that cadence plus slack for a missed run.
-STALE_AFTER_HOURS = 30
+# How far a monthly/weekly session count is allowed to drift from a direct
+# SQL recount before the gate blocks the send - a real discrepancy here means
+# the snapshot and the database have already disagreed once (see fix #1/#2).
+SESSION_COUNT_TOLERANCE = 1
+# How far ACWR is allowed to move day-over-day without a logged activity to
+# explain it - a jump bigger than this with no activity behind it means one
+# of the two computations resolved a different date window (see fix #3).
+ACWR_JUMP_TOLERANCE = 0.3
+
+
+def _render_cell(text: str) -> str:
+    """Escape and render inline markdown (currently just **bold**) within a
+    table cell - _render_table used to insert cell text raw, so a cell like
+    "**no data**" leaked its literal asterisks into the email instead of
+    rendering as bold."""
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(text))
 
 
 def _render_table(lines: list[str]) -> str:
@@ -40,9 +54,9 @@ def _render_table(lines: list[str]) -> str:
     if not rows:
         return ""
     header, *body = rows
-    thead = "".join(f"<th style='text-align:left;padding:4px 10px;border-bottom:1px solid #ccc;'>{c}</th>" for c in header)
+    thead = "".join(f"<th style='text-align:left;padding:4px 10px;border-bottom:1px solid #ccc;'>{_render_cell(c)}</th>" for c in header)
     trs = "".join(
-        "<tr>" + "".join(f"<td style='padding:4px 10px;border-bottom:1px solid #eee;'>{c}</td>" for c in r) + "</tr>"
+        "<tr>" + "".join(f"<td style='padding:4px 10px;border-bottom:1px solid #eee;'>{_render_cell(c)}</td>" for c in r) + "</tr>"
         for r in body
     )
     return f"<table style='border-collapse:collapse;font-size:14px;margin:8px 0;'><thead><tr>{thead}</tr></thead><tbody>{trs}</tbody></table>"
@@ -81,56 +95,114 @@ def _markdown_to_html(text: str) -> str:
     return "".join(out)
 
 
-def _stale_sources(conn) -> list[str]:
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=STALE_AFTER_HOURS)
-    stale = []
-    for source in ("daily_metrics", "activities", "training_status"):
-        rows = db.fetch_all_dicts(
-            conn,
-            "SELECT timestamp, status FROM sync_log WHERE source = ? ORDER BY timestamp DESC LIMIT 1",
-            (source,),
-        )
-        if not rows:
-            stale.append(f"{source} (never synced)")
-            continue
-        last = rows[0]
-        last_time = datetime.fromisoformat(last["timestamp"])
-        if last["status"] != "ok":
-            stale.append(f"{source} (last sync errored)")
-        elif last_time < cutoff:
-            stale.append(f"{source} (last synced {last_time.isoformat()})")
-    return stale
-
-
 def _pace_rail_table_row(label: str, actual, target, unit: str = "") -> str:
+    value = "not yet synced" if actual is None else f"{actual}{unit} / {target}{unit}"
     return (
         f"<tr><td style='padding:4px 12px 4px 0;color:#7C8794;'>{html.escape(label)}</td>"
-        f"<td style='padding:4px 0;font-family:monospace;'>{actual}{unit} / {target}{unit}</td></tr>"
+        f"<td style='padding:4px 0;font-family:monospace;'>{value}</td></tr>"
     )
 
 
-def render_email(conn, brief: dict) -> tuple[str, str]:
-    """Return (subject, html_body) for the given `briefs` row."""
+def validate_snapshot(conn, brief: dict, intended_date: Optional[str] = None) -> list[str]:
+    """Pre-send gate: every check that must pass before a coaching brief is
+    allowed out the door. A wrong brief is worse than no brief - this gate
+    is the point. Returns a list of failure descriptions; empty means clean.
+    Deliberately redundant with checks already done at generation time (the
+    build_snapshot assertion, the readiness gate) - this re-verifies against
+    the stored snapshot independently, since generation and send are
+    separate jobs that could in principle disagree."""
+    intended_date = intended_date or config.local_today().isoformat()
+    snapshot = json.loads(brief["metrics_snapshot_json"])
+    failures = []
+
+    snapshot_date_str = snapshot.get("snapshot_date")
+    if snapshot_date_str != intended_date:
+        failures.append(f"snapshot_date ({snapshot_date_str}) does not match intended date ({intended_date})")
+        return failures  # every other check below assumes a valid, parseable date
+
+    snapshot_date = date.fromisoformat(snapshot_date_str)
+
+    today_steps = (snapshot.get("steps_pace") or {}).get("actual")
+    yesterday_steps = (snapshot.get("yesterday") or {}).get("steps")
+    if today_steps is not None and yesterday_steps is not None and today_steps != 0 and today_steps == yesterday_steps:
+        failures.append(f"today's steps ({today_steps}) equal yesterday's steps - likely a date-resolution bug")
+
+    if re.search(r"\bNone\b|\bnull\b|\bNaN\b", brief.get("body_markdown", "")):
+        failures.append("brief text contains a literal None/null/NaN token")
+
+    month_start = snapshot_date.replace(day=1)
+    strength_actual = (snapshot.get("strength_pace") or {}).get("actual")
+    if strength_actual is not None:
+        sql_count = db.fetch_all_dicts(
+            conn, "SELECT COUNT(*) as n FROM activities WHERE date >= ? AND date <= ? AND bucket = 'strength'",
+            (month_start.isoformat(), snapshot_date.isoformat()),
+        )[0]["n"]
+        if abs(strength_actual - sql_count) > SESSION_COUNT_TOLERANCE:
+            failures.append(f"strength session count ({strength_actual}) vs. direct SQL count ({sql_count}) differ by more than {SESSION_COUNT_TOLERANCE}")
+
+    week_start = snapshot_date - timedelta(days=snapshot_date.weekday())
+    racquet_actual = (snapshot.get("racquet_pace") or {}).get("actual")
+    if racquet_actual is not None:
+        sql_count = db.fetch_all_dicts(
+            conn, "SELECT COUNT(*) as n FROM activities WHERE date >= ? AND date <= ? AND bucket = 'racquet'",
+            (week_start.isoformat(), snapshot_date.isoformat()),
+        )[0]["n"]
+        if abs(racquet_actual - sql_count) > SESSION_COUNT_TOLERANCE:
+            failures.append(f"racquet session count ({racquet_actual}) vs. direct SQL count ({sql_count}) differ by more than {SESSION_COUNT_TOLERANCE}")
+
+    acwr = (snapshot.get("acute_chronic_load_ratio") or {}).get("ratio")
+    if acwr is not None:
+        prior_ratio = analytics.acute_chronic_load_ratio(conn, snapshot_date - timedelta(days=1)).get("ratio")
+        if prior_ratio is not None and abs(acwr - prior_ratio) > ACWR_JUMP_TOLERANCE:
+            activity_logged = bool(db.fetch_all_dicts(
+                conn, "SELECT 1 FROM activities WHERE date = ? LIMIT 1", (snapshot_date.isoformat(),)
+            ))
+            if not activity_logged:
+                failures.append(f"ACWR jumped from {prior_ratio} to {acwr} with no logged activity to explain it")
+
+    if (snapshot.get("sync_status") or {}).get("any_stale"):
+        stale = [n for n, i in snapshot["sync_status"]["sources"].items() if i.get("stale")]
+        failures.append(f"sync not completed within the last {analytics.STALE_AFTER_HOURS}h: {', '.join(stale)}")
+
+    return failures
+
+
+def render_incomplete_notice(kind: str, intended_date: str, failures: list[str]) -> tuple[str, str]:
+    """What gets sent instead of a coaching brief when validate_snapshot()
+    finds a problem - names the failed check rather than guessing at a
+    number that might be wrong."""
+    label = "Daily Brief" if kind == "daily" else "Weekly Review"
+    subject = f"Your coach — {label} — data incomplete — {intended_date}"
+    failure_list = "".join(f"<li>{html.escape(f)}</li>" for f in failures)
+    html_body = f"""
+    <html><body style="font-family: sans-serif; color: #222; max-width: 600px;">
+      <h2>{label} — {intended_date}</h2>
+      <p style='background:#3a1f1f;color:#F2545B;padding:10px 14px;border-radius:6px;'>
+        <b>Data incomplete - no brief sent today.</b> Failed checks:
+      </p>
+      <ul>{failure_list}</ul>
+    </body></html>
+    """
+    return subject, html_body
+
+
+def render_email(brief: dict) -> tuple[str, str]:
+    """Return (subject, html_body) for the given `briefs` row. Reads only
+    from the snapshot already persisted alongside this brief - never its own
+    live query - so the numbers here can never drift from the numbers the
+    brief's own narrative text was generated from. Only called after
+    validate_snapshot() has passed - assumes clean data, no staleness
+    banner needed here anymore (a stale sync blocks the send entirely)."""
     kind = brief["kind"]
     body_html = _markdown_to_html(brief["body_markdown"])
+    snapshot = json.loads(brief["metrics_snapshot_json"])
 
-    stale = _stale_sources(conn)
-    stale_banner = ""
-    if stale:
-        stale_banner = (
-            "<p style='background:#3a1f1f;color:#F2545B;padding:10px 14px;"
-            "border-radius:6px;'><b>Data may be stale</b> - not coaching on "
-            f"fresh numbers: {html.escape(', '.join(stale))}.</p>"
-        )
-
-    pace_rows = ""
-    today_rows = db.fetch_all_dicts(conn, "SELECT * FROM daily_metrics ORDER BY date DESC LIMIT 1")
-    if today_rows:
-        pace_rows = (
-            "<table style='border-collapse:collapse;font-size:14px;'>"
-            + _pace_rail_table_row("Steps today", today_rows[0].get("steps") or 0, config.GOALS["steps"]["daily_target"])
-            + "</table>"
-        )
+    steps_pace = snapshot.get("steps_pace") or {}
+    pace_rows = (
+        "<table style='border-collapse:collapse;font-size:14px;'>"
+        + _pace_rail_table_row("Steps today", steps_pace.get("actual"), steps_pace.get("target"))
+        + "</table>"
+    )
 
     dashboard_link = (
         f"<p><a href='{config.DASHBOARD_URL}'>View the full dashboard</a></p>"
@@ -138,11 +210,11 @@ def render_email(conn, brief: dict) -> tuple[str, str]:
     )
 
     label = "Daily Brief" if kind == "daily" else "Weekly Review"
-    subject = f"Your coach — {label} — {brief['date']}"
+    snapshot_date = snapshot.get("snapshot_date", brief["date"])
+    subject = f"Your coach — {label} — {snapshot_date}"
     html_body = f"""
     <html><body style="font-family: sans-serif; color: #222; max-width: 600px;">
-      <h2>{label}</h2>
-      {stale_banner}
+      <h2>{label} — {snapshot_date}</h2>
       {body_html}
       {pace_rows}
       {dashboard_link}
@@ -182,7 +254,14 @@ def main():
         )
         if not rows:
             raise RuntimeError(f"No stored '{args.kind}' brief to send - run coach generation first.")
-        subject, html_body = render_email(conn, rows[0])
+        brief = rows[0]
+
+        intended_date = config.local_today().isoformat()
+        failures = validate_snapshot(conn, brief, intended_date)
+        if failures:
+            subject, html_body = render_incomplete_notice(args.kind, intended_date, failures)
+        else:
+            subject, html_body = render_email(brief)
 
     if args.dry_run:
         print(f"SUBJECT: {subject}\n")

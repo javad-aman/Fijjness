@@ -23,7 +23,7 @@ from statsmodels.stats.multitest import multipletests
 from statsmodels.tsa.stattools import acf
 from statsmodels.tsa.seasonal import STL
 
-from garmin_tracker import db
+from garmin_tracker import config, db
 
 RNG_SEED = 20260101  # fixed seed - bootstrap results are reproducible run to run
 
@@ -431,7 +431,7 @@ def run_all(conn, today: Optional[date] = None, history_days: int = 365) -> dict
     rest comparison against real data, and stores every result (surfaced or
     suppressed) in the findings table. Do NOT call this before
     scripts/validate_stats_engine.py has passed on synthetic data."""
-    today = today or date.today()
+    today = today or config.local_today()
     start = today - timedelta(days=history_days)
     by_date = _daily_series(conn, start, today)
 

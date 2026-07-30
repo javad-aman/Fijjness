@@ -10,8 +10,8 @@
     <span class="readiness-dot" data-state="{{ readiness.state }}"></span>
     <span class="readiness-label" data-state="{{ readiness.state }}">{{ readiness.state }}</span>
     <span class="readiness-detail">
-      Body Battery {{ today_metrics.body_battery_wake if today_metrics.body_battery_wake is not none else '—' }}
-      · Sleep score {{ today_metrics.sleep_score if today_metrics.sleep_score is not none else '—' }}
+      Body Battery {{ readiness.body_battery_wake if readiness.body_battery_wake is not none else '—' }}
+      · Sleep score {{ readiness.sleep_score if readiness.sleep_score is not none else '—' }}
     </span>
   </div>
 </div>
@@ -27,8 +27,12 @@
     </div>
   </div>
   <div class="pace-rail-numbers">
+    {% if rail.not_synced %}
+    <span class="compare">not yet synced</span>
+    {% else %}
     {{ "{:,}".format(rail.actual) if rail.actual is number else rail.actual }}
     <span class="muted">/ {{ "{:,}".format(rail.target) if rail.target is number else rail.target }}{{ rail.unit }}</span>
+    {% endif %}
   </div>
 </div>
 {% endfor %}

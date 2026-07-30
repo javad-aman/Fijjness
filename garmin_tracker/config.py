@@ -1,6 +1,8 @@
 """Loads settings from .env with sensible defaults."""
 import os
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import yaml
 from dotenv import load_dotenv
@@ -8,6 +10,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# The Garmin account, and every goal/pace boundary (month start, week start,
+# "today"), is anchored to this timezone - never the host machine's local
+# clock. Local runs happen on a Windows box in US Central; the cloud runs
+# happen on GitHub Actions' UTC runners. A bare `date.today()` silently
+# returns a different calendar date depending on which of those is running
+# it, for the ~5-6 hours each evening where UTC has already rolled to
+# tomorrow but Chicago hasn't - this was the root cause of the ACWR/session-
+# count numbers disagreeing between the dashboard and the cloud email.
+LOCAL_TZ = ZoneInfo("America/Chicago")
+
+
+def local_today() -> date:
+    """The one authoritative "what day is it" for every report - always
+    resolved in LOCAL_TZ regardless of the host machine's own clock/tz."""
+    return datetime.now(LOCAL_TZ).date()
 
 GOALS_PATH = BASE_DIR / "config" / "goals.yaml"
 

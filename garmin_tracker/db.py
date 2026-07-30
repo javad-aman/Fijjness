@@ -109,6 +109,13 @@ CREATE TABLE IF NOT EXISTS sync_state (
     source TEXT PRIMARY KEY,
     last_synced_date TEXT
 );
+
+CREATE TABLE IF NOT EXISTS intraday_steps (
+    date TEXT,
+    hour INTEGER,
+    steps INTEGER,
+    PRIMARY KEY (date, hour)
+);
 """
 
 
