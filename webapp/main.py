@@ -263,6 +263,8 @@ def activity(request: Request):
     try:
         weekly_calories = analytics.weekly_calories_by_bucket(conn)
         weekday_cycle = analytics.weekday_step_cycle(conn)
+        cycle_weeks = 12
+        cycle_range = f"trailing {cycle_weeks} weeks"
         heatmap = analytics.calendar_heatmap_data(conn)
         avg_calories = analytics.avg_calories_per_session(conn)
 
@@ -282,6 +284,7 @@ def activity(request: Request):
                     (name, charts.cycle_plot_svg(name, panel))
                     for name, panel in weekday_cycle.items()
                 ],
+                "cycle_range": cycle_range,
                 "heatmap_svg": charts.heatmap_svg(heatmap),
                 "heatmap_month": heatmap["month"],
                 "avg_calories": avg_calories,

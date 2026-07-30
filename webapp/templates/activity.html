@@ -7,7 +7,7 @@
   <div class="chart-scroll">{{ stacked_bar_svg | safe }}</div>
 </div>
 
-<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Steps by weekday ({{ heatmap_month }})</div>
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Steps by weekday ({{ cycle_range }})</div>
 <div class="card">
   <div class="cycle-grid">
     {% for name, svg in cycle_panels %}
