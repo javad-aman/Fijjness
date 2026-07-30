@@ -1,15 +1,17 @@
 """FastAPI app serving the Today screen (Phase 2 - static, no LLM yet)."""
 import base64
 import json
+import re
 import secrets
+from datetime import date, datetime
 
-from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Form, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from garmin_tracker import analytics, config, db, stats_engine
+from garmin_tracker import analytics, coach_email, config, db, stats_engine
 from webapp import charts
 
 METRIC_LABELS = {
@@ -60,12 +62,23 @@ def _rail(label: str, pace: dict, unit: str = "", not_synced: bool = False) -> d
     target = pace["target"] or 0
     actual = pace["actual"]
     expected = pace["expected_by_now"]
+    delta = pace["delta"]
     # A missing actual (not yet synced) is never rendered as a real zero -
     # the fill bar shows empty and the template shows "not yet synced"
     # instead of a fabricated number.
     not_synced = not_synced or actual is None
     fill_pct = min((actual / target) * 100, 100) if target and actual is not None else 0
     tick_pct = min((expected / target) * 100, 100) if target and expected is not None else 0
+
+    gap_label = None
+    if delta is not None:
+        if delta < 0:
+            gap_label = f"{abs(delta):,} behind"
+        elif delta > 0:
+            gap_label = f"{delta:,} ahead"
+        else:
+            gap_label = "on pace"
+
     return {
         "label": label,
         "actual": actual,
@@ -75,6 +88,40 @@ def _rail(label: str, pace: dict, unit: str = "", not_synced: bool = False) -> d
         "tick_pct": round(tick_pct, 1),
         "on_pace": pace["on_pace"],
         "not_synced": not_synced,
+        "gap_label": gap_label,
+    }
+
+
+def _split_brief_action(text: str) -> tuple[str, str]:
+    """The daily brief ends with one bolded action sentence, per the coach
+    prompt's own hard constraint - split it out so the card can render it
+    below a hairline instead of buried in the prose."""
+    matches = list(re.finditer(r"\*\*(.+?)\*\*", text))
+    if not matches:
+        return text.strip(), None
+    last = matches[-1]
+    return text[:last.start()].strip(), last.group(1).strip()
+
+
+def _brief_card(conn, today_date: date) -> dict:
+    """The coach brief card must never render nothing - if today's brief is
+    missing or fails the pre-send validation gate, the card says exactly
+    which check failed instead of showing a blank space."""
+    rows = db.fetch_all_dicts(conn, "SELECT * FROM briefs WHERE kind = 'daily' ORDER BY date DESC LIMIT 1")
+    if not rows:
+        return {"status": "missing"}
+
+    brief = rows[0]
+    failures = coach_email.validate_snapshot(conn, brief, today_date.isoformat())
+    if failures:
+        return {"status": "incomplete", "failures": failures}
+
+    prose, action = _split_brief_action(brief["body_markdown"])
+    return {
+        "status": "ok",
+        "prose_html": coach_email._markdown_to_html(prose),
+        "action": action,
+        "date": brief["date"],
     }
 
 
@@ -102,6 +149,82 @@ def today(request: Request):
             _rail("Racquet · This Week", snapshot["racquet_pace"], unit=" sessions"),
         ]
 
+        brief_card = _brief_card(conn, today_date)
+
+        last_sync_at = snapshot["sync_status"]["sources"]["daily_metrics"]["last_sync_at"]
+        last_synced_label = None
+        if last_sync_at:
+            local_time = datetime.fromisoformat(last_sync_at).astimezone(config.LOCAL_TZ)
+            last_synced_label = f"synced {local_time.strftime('%I:%M%p').lstrip('0').lower()}"
+
+        # ---- Steps, 30 days ----
+        steps_data = analytics.steps_30_day(conn, config.GOALS, today_date)
+        steps_module = {"state": steps_data["state"]}
+        if steps_data["state"] == "insufficient":
+            steps_module["requirement"] = f"needs {steps_data['min_required']} days, have {steps_data['n_available']}"
+        else:
+            steps_module.update({
+                "svg": charts.steps_30day_svg(steps_data),
+                "finding": f"You're averaging {steps_data['avg']:,} steps — "
+                           f"{abs(steps_data['pct_vs_goal'])}% {'above' if steps_data['pct_vs_goal'] >= 0 else 'below'} goal",
+                "subtitle": f"{steps_data['range_start']} to {steps_data['range_end']}"
+                            + (f" · {steps_data['n_available']} of 30 days available" if steps_data["state"] == "partial" else ""),
+            })
+
+        # ---- Training calendar ----
+        cal = analytics.training_calendar_weeks(conn, today_date)
+        calendar_module = {
+            "svg": charts.training_calendar_weeks_svg(cal),
+            "subtitle": f"{cal['start']} to {cal['end']}",
+        }
+
+        # ---- Weekly calories ----
+        wc = analytics.weekly_calories_with_total(conn, today=today_date)
+        calories_module = {"state": wc["state"]}
+        if wc["state"] == "insufficient":
+            calories_module["requirement"] = f"needs 3 complete weeks, have {wc['complete_weeks']}"
+        else:
+            calories_module.update({
+                "svg": charts.stacked_bar_svg(wc, total_line=wc["total_active_calories"], stretch=True),
+                "subtitle": f"{wc['week_labels'][0]} to {wc['week_labels'][-1]}"
+                            + (f" · {wc['complete_weeks']} of 12 weeks available" if wc["state"] == "partial" else ""),
+            })
+
+        # ---- Recovery sparklines ----
+        rs = analytics.recovery_sparklines(conn, today_date)
+        recovery_module = {"state": rs["state"]}
+        if rs["state"] == "insufficient":
+            recovery_module["requirement"] = f"needs {rs['min_required']} days, have {rs['n_available']}"
+        else:
+            hr, sleep = rs["resting_hr"], rs["sleep_hours"]
+            hr_band_low = (hr["mean_30d"] - hr["sd_30d"]) if hr["mean_30d"] is not None else None
+            hr_band_high = (hr["mean_30d"] + hr["sd_30d"]) if hr["mean_30d"] is not None else None
+            recovery_module.update({
+                "subtitle": f"{rs['range_start']} to {rs['range_end']}",
+                "hr_svg": charts.sparkline_svg(hr["points"], band_low=hr_band_low, band_high=hr_band_high),
+                "hr_current": hr["current"],
+                "sleep_svg": charts.sparkline_svg(sleep["points"], band_low=sleep["band_low"], band_high=sleep["band_high"]),
+                "sleep_current": sleep["current"],
+            })
+
+        # ---- Weight ----
+        wt = analytics.weight_chart_data(conn, config.GOALS, today_date)
+        weight_module = {"state": wt["state"]}
+        if wt["state"] == "insufficient":
+            weight_module.update({
+                "n_readings": wt["n_readings"], "since": wt["since"],
+                "min_readings": wt["min_readings"], "min_span_days": wt["min_span_days"],
+                "checkpoint": wt["checkpoint"],
+            })
+        else:
+            weight_module.update({
+                "svg": charts.weight_trend_svg(wt["chart_series"], wt["checkpoint"]),
+                "trend_weight_lb": wt["trend_weight_lb"],
+                "rate_lb_per_week": wt["rate_lb_per_week"],
+                "checkpoint": wt["checkpoint"],
+                "projected_range": wt["projected_checkpoint_date_range"],
+            })
+
         return templates.TemplateResponse(
             request,
             "today.html",
@@ -109,12 +232,29 @@ def today(request: Request):
                 "active_page": "today",
                 "today_label": (today_date.strftime("%A, %B ") + str(today_date.day)).upper(),
                 "readiness": snapshot["readiness"],
+                "last_synced_label": last_synced_label,
                 "rails": rails,
                 "yesterday": yesterday,
+                "brief_card": brief_card,
+                "steps_module": steps_module,
+                "calendar_module": calendar_module,
+                "calories_module": calories_module,
+                "recovery_module": recovery_module,
+                "weight_module": weight_module,
             },
         )
     finally:
         conn.close()
+
+
+@app.post("/log-weight")
+def log_weight(weight_lb: float = Form(...)):
+    conn = db.get_connection()
+    try:
+        analytics.log_weight(conn, config.local_today(), weight_lb)
+    finally:
+        conn.close()
+    return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/activity", response_class=HTMLResponse)

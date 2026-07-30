@@ -254,3 +254,145 @@ a {
   .container { padding: 16px 14px 48px; }
   .pace-rail-numbers { font-size: 18px; }
 }
+
+/* ---- Today dashboard grid (full-width redesign) ------------------------
+   Scoped to the Today page only (container--wide / dashboard-grid), so
+   Activity and Insights keep their existing 560px single-column layout
+   unchanged. */
+
+.container--wide {
+  max-width: 1920px;
+  padding: 24px 32px 64px;
+}
+@media (max-width: 700px) {
+  .container--wide { padding: 16px 16px 40px; }
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(12, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.g-full      { grid-column: 1 / -1; }
+.g-brief     { grid-column: 1 / 6; }
+.g-rails     { grid-column: 6 / 13; }
+.g-steps     { grid-column: 1 / 9; }
+.g-yesterday { grid-column: 9 / 13; }
+.g-calories  { grid-column: 1 / 8; }
+.g-recovery  { grid-column: 8 / 13; }
+
+@media (max-width: 1400px) {
+  .g-brief, .g-rails, .g-steps, .g-yesterday, .g-calories, .g-recovery {
+    grid-column: 1 / -1;
+  }
+}
+
+.dashboard-grid .card {
+  padding: 20px;
+  margin-bottom: 0;
+}
+
+.dashboard-grid .section-label {
+  font-family: 'Archivo', sans-serif;
+  font-weight: 600;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+
+.figure-large {
+  font-family: 'IBM Plex Mono', ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 44px;
+  line-height: 1.1;
+}
+
+.chart-subtitle {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.chart-finding {
+  font-size: 16px;
+  margin: 0 0 2px;
+}
+
+/* Fixed heights per spec sec.1 - charts read as instruments, not strips */
+.chart-frame-steps { height: 260px; }
+.chart-frame-weight { height: 240px; }
+.sparkline-frame { height: 90px; }
+
+.insufficient-frame {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 120px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.insufficient-frame b { color: var(--text); }
+
+/* ---- Coach brief card ---- */
+
+.brief-text {
+  font-size: 16px;
+  line-height: 1.7;
+}
+.brief-action {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.brief-timestamp {
+  text-align: right;
+  color: var(--muted);
+  font-size: 11px;
+  margin-top: 10px;
+}
+
+/* ---- Yesterday strip (compact, horizontal) ---- */
+
+.yesterday-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+}
+@media (max-width: 700px) {
+  .yesterday-strip { grid-template-columns: repeat(2, 1fr); }
+}
+.yesterday-metric .mono { font-size: 18px; }
+.yesterday-metric .compare { display: block; margin-top: 2px; }
+
+/* ---- Weight log form ---- */
+
+.log-weight-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.log-weight-form input {
+  background: var(--ground);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-family: 'IBM Plex Mono', monospace;
+  width: 90px;
+}
+.log-weight-form button {
+  background: var(--neutral);
+  border: none;
+  color: var(--ground);
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-family: 'Archivo', sans-serif;
+  font-weight: 600;
+  font-size: 12px;
+  cursor: pointer;
+}

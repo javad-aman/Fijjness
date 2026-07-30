@@ -584,6 +584,20 @@ def readiness_today(conn, today: Optional[date] = None) -> dict:
         baseline,
     )
     result["baseline_resting_hr_30d"] = round(baseline, 1) if baseline else None
+
+    if result["state"] == "unknown":
+        sync_rows = db.fetch_all_dicts(
+            conn, "SELECT timestamp FROM sync_log WHERE source = 'daily_metrics' AND status = 'ok' "
+                  "ORDER BY timestamp DESC LIMIT 1",
+        )
+        if sync_rows:
+            last_sync_utc = datetime.fromisoformat(sync_rows[0]["timestamp"])
+            last_sync_local = last_sync_utc.astimezone(config.LOCAL_TZ)
+            time_str = last_sync_local.strftime("%I:%M%p").lstrip("0").lower()
+            result["unknown_reason"] = f"no sync since {time_str}"
+        else:
+            result["unknown_reason"] = "never synced"
+
     return result
 
 
@@ -808,3 +822,241 @@ def build_snapshot(conn, goals: dict, today: Optional[date] = None) -> dict:
     )
 
     return snapshot
+
+
+# ---- Today dashboard v2 (descriptive charts, no inference gate) -----------
+#
+# Everything below just shows measured data - no statistical claims, so none
+# of Phase 5's validation machinery applies here. The one rule that does
+# apply everywhere: never render a chart that implies more data exists than
+# it does, and never zero-fill a missing day - a gap is a gap.
+
+def coverage_state(n: int, min_required: int, full_target: int) -> str:
+    """full / partial / insufficient given how much real data exists against
+    a module's own minimum-useful and full-window requirements."""
+    if n < min_required:
+        return "insufficient"
+    if n < full_target:
+        return "partial"
+    return "full"
+
+
+def data_coverage(conn) -> dict:
+    """One query per metric at page load, per spec sec.0 - min/max date and
+    row count for every metric a Today-page chart might need."""
+    coverage = {}
+    for col in ("steps", "weight_lb", "resting_hr", "sleep_minutes", "active_calories"):
+        rows = db.fetch_all_dicts(
+            conn, f"SELECT MIN(date) as earliest, MAX(date) as latest, COUNT(*) as n "
+                  f"FROM daily_metrics WHERE {col} IS NOT NULL"
+        )
+        coverage[col] = rows[0] if rows else {"earliest": None, "latest": None, "n": 0}
+    activity_rows = db.fetch_all_dicts(
+        conn, "SELECT MIN(date) as earliest, MAX(date) as latest, COUNT(*) as n FROM activities"
+    )
+    coverage["activities"] = activity_rows[0] if activity_rows else {"earliest": None, "latest": None, "n": 0}
+    return coverage
+
+
+def steps_30_day(conn, goals: dict, today: Optional[date] = None,
+                  window_days: int = 30, min_required: int = 7) -> dict:
+    today = today or config.local_today()
+    start = today - timedelta(days=window_days - 1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, steps FROM daily_metrics WHERE date >= ? AND date <= ? AND steps IS NOT NULL ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    n = len(rows)
+    state = coverage_state(n, min_required, window_days)
+    if state == "insufficient":
+        return {"state": "insufficient", "min_required": min_required, "n_available": n}
+
+    by_date = {r["date"]: r["steps"] for r in rows}
+    days = []
+    d = start
+    while d <= today:
+        days.append({"date": d.isoformat(), "steps": by_date.get(d.isoformat())})  # None = gap, never 0
+        d += timedelta(days=1)
+
+    values = [r["steps"] for r in rows]
+    avg = sum(values) / len(values)
+    goal = goals["steps"]["daily_target"]
+    pct_vs_goal = round((avg - goal) / goal * 100)
+
+    moving_avg_7d = []
+    for i in range(len(days)):
+        window = [d2["steps"] for d2 in days[max(0, i - 6):i + 1] if d2["steps"] is not None]
+        moving_avg_7d.append(round(sum(window) / len(window), 1) if window else None)
+
+    return {
+        "state": state,
+        "days": days,
+        "moving_avg_7d": moving_avg_7d,
+        "goal": goal,
+        "avg": round(avg),
+        "pct_vs_goal": pct_vs_goal,
+        "range_start": start.isoformat(),
+        "range_end": today.isoformat(),
+        "n_available": n,
+    }
+
+
+def weekly_calories_with_total(conn, weeks: int = 12, today: Optional[date] = None,
+                                min_required_weeks: int = 3) -> dict:
+    """Extends weekly_calories_by_bucket with the total-active-calories
+    overlay line, so the gap between "logged activity" and "total movement"
+    is visible - per spec, usually the interesting part."""
+    today = today or config.local_today()
+    base = weekly_calories_by_bucket(conn, weeks=weeks, today=today)
+
+    this_week_start = today - timedelta(days=today.weekday())
+    start = this_week_start - timedelta(weeks=weeks - 1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, active_calories FROM daily_metrics WHERE date >= ? AND date <= ? AND active_calories IS NOT NULL",
+        (start.isoformat(), today.isoformat()),
+    )
+
+    totals = []
+    cursor = start
+    complete_weeks = 0
+    for _ in range(weeks):
+        week_start = cursor
+        week_end = week_start + timedelta(days=6)
+        week_total = sum(
+            r["active_calories"] for r in rows
+            if week_start.isoformat() <= r["date"] <= week_end.isoformat()
+        )
+        totals.append(round(week_total))
+        if week_end < today:
+            complete_weeks += 1
+        cursor += timedelta(weeks=1)
+
+    base["total_active_calories"] = totals
+    base["state"] = coverage_state(complete_weeks, min_required_weeks, weeks)
+    base["complete_weeks"] = complete_weeks
+    return base
+
+
+def recovery_sparklines(conn, today: Optional[date] = None, days: int = 60,
+                         min_required: int = 14) -> dict:
+    today = today or config.local_today()
+    start = today - timedelta(days=days - 1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, resting_hr, sleep_minutes FROM daily_metrics WHERE date >= ? AND date <= ? ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    n = min(
+        sum(1 for r in rows if r["resting_hr"] is not None),
+        sum(1 for r in rows if r["sleep_minutes"] is not None),
+    )
+    state = coverage_state(n, min_required, days)
+    if state == "insufficient":
+        return {"state": "insufficient", "min_required": min_required, "n_available": n}
+
+    hr_points = [(r["date"], r["resting_hr"]) for r in rows if r["resting_hr"] is not None]
+    sleep_points = [(r["date"], round(r["sleep_minutes"] / 60.0, 1)) for r in rows if r["sleep_minutes"] is not None]
+
+    baseline_start = today - timedelta(days=29)
+    hr_baseline_vals = [v for d_str, v in hr_points if d_str >= baseline_start.isoformat()]
+    hr_mean = sum(hr_baseline_vals) / len(hr_baseline_vals) if hr_baseline_vals else None
+    hr_sd = (
+        (sum((v - hr_mean) ** 2 for v in hr_baseline_vals) / len(hr_baseline_vals)) ** 0.5
+        if hr_baseline_vals else None
+    )
+
+    return {
+        "state": state,
+        "range_start": start.isoformat(),
+        "range_end": today.isoformat(),
+        "resting_hr": {
+            "points": [{"date": d_str, "value": v} for d_str, v in hr_points],
+            "mean_30d": round(hr_mean, 1) if hr_mean is not None else None,
+            "sd_30d": round(hr_sd, 1) if hr_sd is not None else None,
+            "current": hr_points[-1][1] if hr_points else None,
+        },
+        "sleep_hours": {
+            "points": [{"date": d_str, "value": v} for d_str, v in sleep_points],
+            "band_low": 7, "band_high": 8,
+            "current": sleep_points[-1][1] if sleep_points else None,
+        },
+    }
+
+
+def weight_chart_data(conn, goals: dict, today: Optional[date] = None,
+                       min_readings: int = 8, min_span_days: int = 21) -> dict:
+    today = today or config.local_today()
+    rows = db.fetch_all_dicts(conn, "SELECT date, weight_lb FROM daily_metrics WHERE weight_lb IS NOT NULL ORDER BY date")
+    n = len(rows)
+    span_days = (today - _parse_date(rows[0]["date"])).days if rows else 0
+
+    if n < min_readings or span_days < min_span_days:
+        checkpoint = next_checkpoint(goals["weight"]["checkpoints"], today)
+        return {
+            "state": "insufficient",
+            "n_readings": n,
+            "since": rows[0]["date"] if rows else None,
+            "min_readings": min_readings,
+            "min_span_days": min_span_days,
+            "checkpoint": checkpoint,
+        }
+
+    result = trend_weight(conn, goals, today)
+    result["state"] = "full"
+
+    # Full-resolution series for the chart itself (trend_weight's own
+    # raw_points is capped at the last 30 for the JSON snapshot/LLM - the
+    # chart needs the whole window plus a matched EWMA line, faint dots,
+    # a straight line to the checkpoint target, and the projection band).
+    full_rows = [r for r in rows if _parse_date(r["date"]) >= today - timedelta(days=180)]
+    full_ewma = _ewma([r["weight_lb"] for r in full_rows])
+    result["chart_series"] = [
+        {"date": r["date"], "weight_lb": r["weight_lb"], "ewma": round(e, 2)}
+        for r, e in zip(full_rows, full_ewma)
+    ]
+    return result
+
+
+def log_weight(conn, target_date: date, weight_lb: float) -> None:
+    """The [Log weight] button - simplest possible manual entry, one row."""
+    existing = db.fetch_all_dicts(conn, "SELECT date FROM daily_metrics WHERE date = ?", (target_date.isoformat(),))
+    if existing:
+        conn.execute("UPDATE daily_metrics SET weight_lb = ? WHERE date = ?", (weight_lb, target_date.isoformat()))
+        conn.commit()
+    else:
+        db.upsert(conn, "daily_metrics", {"date": target_date.isoformat(), "weight_lb": weight_lb})
+        conn.commit()
+
+
+def training_calendar_weeks(conn, today: Optional[date] = None, weeks: int = 26) -> dict:
+    """GitHub-style: columns = weeks, rows = weekdays. Renders whatever
+    range actually exists, up to `weeks` - days before real coverage began
+    are marked so the template renders nothing there, not an empty cell."""
+    today = today or config.local_today()
+    earliest_rows = db.fetch_all_dicts(conn, "SELECT MIN(date) as earliest FROM activities")
+    earliest = earliest_rows[0]["earliest"] if earliest_rows and earliest_rows[0]["earliest"] else None
+    earliest_date = _parse_date(earliest) if earliest else None
+
+    requested_start = today - timedelta(weeks=weeks)
+    start = max(requested_start, earliest_date) if earliest_date else requested_start
+    start = start - timedelta(days=start.weekday())  # align to Monday for clean columns
+
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, bucket FROM activities WHERE date >= ? AND date <= ?",
+        (start.isoformat(), today.isoformat()),
+    )
+    by_date: dict[str, set] = {}
+    for r in rows:
+        by_date.setdefault(r["date"], set()).add(r["bucket"])
+
+    days = []
+    d = start
+    while d <= today:
+        d_str = d.isoformat()
+        days.append({
+            "date": d_str,
+            "buckets": sorted(by_date.get(d_str, [])),
+            "before_coverage": earliest_date is not None and d < earliest_date,
+        })
+        d += timedelta(days=1)
+
+    return {"start": start.isoformat(), "end": today.isoformat(), "days": days, "requested_weeks": weeks}
