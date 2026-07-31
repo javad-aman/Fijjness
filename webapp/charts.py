@@ -10,8 +10,10 @@ from __future__ import annotations
 
 GROUND = "#0E1116"
 LINE = "#262D38"
+LINE_SOFT = "#1E242E"
 TEXT = "#E8EAED"
 MUTED = "#7C8794"
+DIM = "#4A535F"
 AHEAD = "#4FD1A5"
 BEHIND = "#F2545B"
 NEUTRAL = "#6C8EFF"
@@ -19,12 +21,13 @@ AMBER = "#F2A93B"
 
 # ahead/behind are reserved exclusively for pace on/off-state (spec §9: "Green
 # and red mean on-pace and off-pace, nowhere else") - so categorical charts
-# below never use them. Buckets get non-pace hues instead.
+# below never use them, even though dashboard-prototype.html's own mock
+# reused --ahead green for "racquet". Buckets get 4 distinct non-pace hues.
 BUCKET_COLORS = {
     "strength": NEUTRAL,
-    "racquet": AMBER,
-    "cardio": "#4A9B8E",  # muted teal - distinct from both ahead-green and neutral-blue
-    "other": MUTED,
+    "racquet": "#E0A458",  # amber-orange
+    "cardio": "#8B7BB8",   # muted purple
+    "other": DIM,
 }
 
 FONT = "font-family='IBM Plex Mono, ui-monospace, monospace'"
@@ -33,6 +36,12 @@ LABEL_FONT = "font-family='Inter, sans-serif'"
 
 def _esc(s) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;")
+
+
+def _human_date(iso_str: str) -> str:
+    from datetime import date as _date
+    d = _date.fromisoformat(iso_str)
+    return f"{d.strftime('%b')} {d.day}"
 
 
 def stacked_bar_svg(weekly: dict, width: int = 520, height: int = 220,
@@ -90,30 +99,42 @@ def stacked_bar_svg(weekly: dict, width: int = 520, height: int = 220,
             parts.append(
                 f"<rect x='{x:.1f}' y='{y_cursor:.1f}' width='{bar_w:.1f}' height='{seg_h:.1f}' fill='{BUCKET_COLORS.get(b, MUTED)}'/>"
             )
-        # week label (short, every other week if crowded)
-        if n <= 8 or i % 2 == 0:
+        # week label: per-bar dates on the Activity page, just two endpoint
+        # labels ("12 weeks ago" / "this week") on the Today dashboard - the
+        # `stretch` flag already distinguishes the two contexts.
+        if not stretch and (n <= 8 or i % 2 == 0):
             wk_label = labels[i][5:]  # MM-DD
             parts.append(
                 f"<text x='{x + bar_w / 2:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}' text-anchor='middle'>{_esc(wk_label)}</text>"
             )
 
+    if stretch:
+        parts.append(f"<text x='{pad_left}' y='{height - 6}' {LABEL_FONT} font-size='10' fill='{DIM}'>{n} weeks ago</text>")
+        parts.append(f"<text x='{width - 10}' y='{height - 6}' {LABEL_FONT} font-size='10' fill='{DIM}' text-anchor='end'>this week</text>")
+
     if total_line:
         points = [(bar_centers[i], y0 - (total_line[i] / max_val) * plot_h) for i in range(n)]
         path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
-        parts.append(f"<path d='{path}' fill='none' stroke='{TEXT}' stroke-width='1.5'/>")
-        for x, y in points:
-            parts.append(f"<circle cx='{x:.1f}' cy='{y:.1f}' r='2' fill='{TEXT}'/>")
-        lx, ly = points[-1]
-        parts.append(
-            f"<text x='{lx:.1f}' y='{ly - 8:.1f}' {LABEL_FONT} font-size='9' fill='{TEXT}' text-anchor='end'>total active cal</text>"
-        )
+        dash = " stroke-dasharray='4,3'" if stretch else ""
+        opacity = "0.55" if stretch else "1"
+        parts.append(f"<path d='{path}' fill='none' stroke='{TEXT}' stroke-width='1.5' opacity='{opacity}'{dash}/>")
+        if not stretch:
+            for x, y in points:
+                parts.append(f"<circle cx='{x:.1f}' cy='{y:.1f}' r='2' fill='{TEXT}'/>")
+            lx, ly = points[-1]
+            parts.append(
+                f"<text x='{lx:.1f}' y='{ly - 8:.1f}' {LABEL_FONT} font-size='9' fill='{TEXT}' text-anchor='end'>total active cal</text>"
+            )
 
-    # direct labels (legend-free, per spec: no legend under 5 series)
-    lx = pad_left
-    for b in buckets:
-        parts.append(f"<rect x='{lx}' y='0' width='9' height='9' fill='{BUCKET_COLORS.get(b, MUTED)}'/>")
-        parts.append(f"<text x='{lx + 13}' y='8' {LABEL_FONT} font-size='10' fill='{TEXT}'>{_esc(b)}</text>")
-        lx += 16 + len(b) * 6 + 14
+    # direct labels (legend-free, per spec: no legend under 5 series) on the
+    # Activity page; the Today dashboard renders its own external HTML
+    # legend below the chart instead (matching dashboard-prototype.html).
+    if not stretch:
+        lx = pad_left
+        for b in buckets:
+            parts.append(f"<rect x='{lx}' y='0' width='9' height='9' fill='{BUCKET_COLORS.get(b, MUTED)}'/>")
+            parts.append(f"<text x='{lx + 13}' y='8' {LABEL_FONT} font-size='10' fill='{TEXT}'>{_esc(b)}</text>")
+            lx += 16 + len(b) * 6 + 14
 
     parts.append("</svg>")
     return "".join(parts)
@@ -265,14 +286,23 @@ def steps_30day_svg(steps_data: dict, width: int = 900, height: int = 260) -> st
 
     parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
     parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
-    parts.append(f"<line x1='{pad_left}' y1='{y0:.1f}' x2='{width - pad_right}' y2='{y0:.1f}' stroke='{LINE}' stroke-width='1'/>")
+
+    # Reference gridlines at even fractions of the goal - orientation, not
+    # meant to be read precisely (per spec: sparkline-adjacent charts are
+    # for shape recognition first).
+    step_grid = goal / 2
+    grid_val = step_grid
+    while grid_val < max_val:
+        gy = y_of(grid_val)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        grid_val += step_grid
 
     goal_y = y_of(goal)
     parts.append(
-        f"<line x1='{pad_left}' y1='{goal_y:.1f}' x2='{width - pad_right}' y2='{goal_y:.1f}' "
-        f"stroke='{MUTED}' stroke-width='1' stroke-dasharray='3,3'/>"
+        f"<line x1='{pad_left}' y1='{goal_y:.1f}' x2='{width - pad_right + 8}' y2='{goal_y:.1f}' "
+        f"stroke='{TEXT}' stroke-width='1' stroke-dasharray='3,3' opacity='0.55'/>"
     )
-    parts.append(f"<text x='{width - pad_right + 6}' y='{goal_y + 3:.1f}' {LABEL_FONT} font-size='10' fill='{MUTED}'>goal {goal:,}</text>")
+    parts.append(f"<text x='{width - pad_right + 12}' y='{goal_y + 4:.1f}' {LABEL_FONT} font-size='10.5' fill='{MUTED}'>goal {goal:,}</text>")
 
     for i, day in enumerate(days):
         x = pad_left + i * gap + (gap - bar_w) / 2
@@ -280,27 +310,27 @@ def steps_30day_svg(steps_data: dict, width: int = 900, height: int = 260) -> st
         is_last = i == n - 1
         if v is None:
             if is_last:
-                ph_h = 10
+                ph_h = 24
                 parts.append(
                     f"<rect x='{x:.1f}' y='{y0 - ph_h:.1f}' width='{bar_w:.1f}' height='{ph_h}' "
-                    f"fill='none' stroke='{MUTED}' stroke-width='1' rx='2'/>"
+                    f"fill='none' stroke='{DIM}' stroke-width='1' stroke-dasharray='2,2' rx='1.5'/>"
                 )
             continue
-        bar_h = (v / max_val) * plot_h
-        color = AHEAD if v >= goal else MUTED
-        parts.append(f"<rect x='{x:.1f}' y='{y0 - bar_h:.1f}' width='{bar_w:.1f}' height='{bar_h:.1f}' fill='{color}' rx='2'/>")
+        bar_h = max(1.0, (v / max_val) * plot_h)
+        color = AHEAD if v >= goal else DIM
+        parts.append(f"<rect x='{x:.1f}' y='{y0 - bar_h:.1f}' width='{bar_w:.1f}' height='{bar_h:.1f}' fill='{color}' rx='1.5'/>")
 
     ma_points = [
         (pad_left + i * gap + gap / 2, y_of(v)) for i, v in enumerate(ma7) if v is not None
     ]
     if len(ma_points) >= 2:
         path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in ma_points)
-        parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='2'/>")
+        parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='1.75' opacity='0.9'/>")
 
-    first_label = days[0]["date"][5:]
-    last_label = days[-1]["date"][5:]
-    parts.append(f"<text x='{pad_left}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}'>{_esc(first_label)}</text>")
-    parts.append(f"<text x='{width - pad_right}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}' text-anchor='end'>{_esc(last_label)}</text>")
+    mid_i = n // 2
+    for i, anchor in ((0, "start"), (mid_i, "middle"), (n - 1, "end")):
+        x = pad_left + i * gap + bar_w / 2
+        parts.append(f"<text x='{x:.1f}' y='{height - 8}' {LABEL_FONT} font-size='10' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(days[i]['date']))}</text>")
 
     parts.append("</svg>")
     return "".join(parts)
@@ -309,25 +339,41 @@ def steps_30day_svg(steps_data: dict, width: int = 900, height: int = 260) -> st
 def training_calendar_weeks_svg(cal: dict, cell: int = 14, gap: int = 3) -> str:
     """GitHub-style: columns = weeks, rows = weekdays (Mon top). Days before
     real coverage began render nothing - not an empty cell. Multiple buckets
-    on one day split the cell diagonally."""
+    on one day split the cell diagonally. Weekday labels down the left edge,
+    month labels along the bottom (computed from real dates, not a fixed
+    cadence, so it holds up regardless of the actual window length)."""
     days = cal["days"]
     if not days:
         return "<svg width='100' height='40'></svg>"
 
+    pad_left = 30
     n_cols = -(-len(days) // 7)
-    width = n_cols * (cell + gap)
+    width = pad_left + n_cols * (cell + gap)
     height = 7 * (cell + gap) + 20
 
     parts = [f"<svg viewBox='0 0 {width} {height}' style='width:{width}px;height:auto;display:block'>"]
     parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
 
+    for label, row in (("Mon", 0), ("Wed", 2), ("Fri", 4)):
+        ly = row * (cell + gap) + 4 + cell - 2
+        parts.append(f"<text x='0' y='{ly}' {LABEL_FONT} font-size='10' fill='{DIM}'>{label}</text>")
+
+    last_month = None
     for i, day in enumerate(days):
-        if day["before_coverage"]:
-            continue
         col = i // 7
         row = i % 7
-        x = col * (cell + gap)
+        x = pad_left + col * (cell + gap)
         y = row * (cell + gap) + 4
+
+        if row == 0 and not day["before_coverage"]:
+            month_label = day["date"][:7]  # YYYY-MM
+            if month_label != last_month:
+                month_name = _human_date(day["date"]).split()[0]
+                parts.append(f"<text x='{x}' y='{height - 4}' {LABEL_FONT} font-size='10' fill='{DIM}'>{_esc(month_name)}</text>")
+                last_month = month_label
+
+        if day["before_coverage"]:
+            continue
         buckets = day["buckets"]
         if not buckets:
             parts.append(f"<rect x='{x}' y='{y}' width='{cell}' height='{cell}' rx='2' fill='{LINE}'/>")
@@ -344,23 +390,18 @@ def training_calendar_weeks_svg(cal: dict, cell: int = 14, gap: int = 3) -> str:
             parts.append(f"<polygon points='{x + cell},{y} {x + cell},{y + cell} {x},{y + cell}' fill='{c2}'/>")
             parts.append("</g>")
 
-    ly = height - 6
-    lx = 0
-    for b, color in BUCKET_COLORS.items():
-        parts.append(f"<rect x='{lx}' y='{ly - 8}' width='8' height='8' fill='{color}'/>")
-        parts.append(f"<text x='{lx + 11}' y='{ly}' {LABEL_FONT} font-size='9' fill='{MUTED}'>{_esc(b)}</text>")
-        lx += 12 + len(b) * 6 + 12
-
     parts.append("</svg>")
     return "".join(parts)
 
 
-def sparkline_svg(points: list, width: int = 900, height: int = 90,
-                   band_low: float = None, band_high: float = None) -> str:
+def sparkline_svg(points: list, width: int = 900, height: int = 92,
+                   band_low: float = None, band_high: float = None,
+                   label: str = "", unit: str = "", current=None) -> str:
     """A shape-recognition sparkline, not a precise-reading chart - no axis
     labels beyond context. Points outside the shaded band get a dot; the
     band is either a fixed reference range (sleep) or a mean+/-SD (resting
-    HR), whichever the caller passes."""
+    HR), whichever the caller passes. Label top-left, current value large
+    at the right - the number you actually came to read."""
     if len(points) < 2:
         return f"<svg width='{width}' height='{height}'></svg>"
 
@@ -372,13 +413,13 @@ def sparkline_svg(points: list, width: int = 900, height: int = 90,
         hi = max(hi, band_high)
     rng = (hi - lo) or 1
 
-    pad_x, pad_y = 6, 8
-    plot_w = width - 2 * pad_x
-    plot_h = height - 2 * pad_y
+    pad_top, pad_bottom, pad_right = 16, 14, 66
+    plot_w = width - pad_right
+    plot_h = height - pad_top - pad_bottom
 
     def xy(i, v):
-        x = pad_x + (i / (len(points) - 1)) * plot_w
-        y = pad_y + plot_h - ((v - lo) / rng) * plot_h
+        x = (i / (len(points) - 1)) * plot_w
+        y = pad_top + plot_h - ((v - lo) / rng) * plot_h
         return x, y
 
     parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
@@ -387,18 +428,53 @@ def sparkline_svg(points: list, width: int = 900, height: int = 90,
     if band_low is not None and band_high is not None:
         _, y_top = xy(0, band_high)
         _, y_bot = xy(0, band_low)
-        parts.append(f"<rect x='{pad_x}' y='{y_top:.1f}' width='{plot_w:.1f}' height='{(y_bot - y_top):.1f}' fill='{LINE}'/>")
+        parts.append(f"<rect x='0' y='{y_top:.1f}' width='{plot_w:.1f}' height='{(y_bot - y_top):.1f}' fill='{NEUTRAL}' opacity='0.09'/>")
 
     line_points = [xy(i, v) for i, v in enumerate(values)]
     path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in line_points)
-    parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='1.5'/>")
+    parts.append(f"<path d='{path}' fill='none' stroke='{TEXT}' stroke-width='1.4' opacity='0.78'/>")
 
     if band_low is not None and band_high is not None:
         for i, v in enumerate(values):
             if v < band_low or v > band_high:
                 x, y = line_points[i]
-                parts.append(f"<circle cx='{x:.1f}' cy='{y:.1f}' r='2.5' fill='{AMBER}'/>")
+                parts.append(f"<circle cx='{x:.1f}' cy='{y:.1f}' r='2.2' fill='{AMBER}'/>")
 
+    if label:
+        parts.append(f"<text x='0' y='9' {LABEL_FONT} font-size='10' fill='{MUTED}'>{_esc(label)}</text>")
+    if current is not None:
+        parts.append(f"<text x='{width}' y='{pad_top + plot_h / 2 + 9:.1f}' {FONT} font-size='25' font-weight='600' fill='{TEXT}' text-anchor='end'>{_esc(current)}</text>")
+        if unit:
+            parts.append(f"<text x='{width}' y='{pad_top + plot_h / 2 + 24:.1f}' {LABEL_FONT} font-size='9.5' fill='{DIM}' text-anchor='end'>{_esc(unit)}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def ghost_preview_svg(width: int = 420, height: int = 110) -> str:
+    """Decorative-only faint preview for the weight module's insufficient-
+    data empty state - suggests what the real chart will look like once
+    enough readings exist. Deterministic pseudo-random, not real data;
+    rendered at low opacity by the template's .ghost wrapper so it never
+    reads as an actual measurement."""
+    seed = 999
+
+    def rnd_seq(n, s):
+        state = s
+        for _ in range(n):
+            state = (state * 1664525 + 1013904223) % 4294967296
+            yield state / 4294967296
+
+    deltas = list(rnd_seq(40, seed))
+    points = []
+    for i in range(40):
+        v = height - 24 - (i * 0.9) + (deltas[i] - 0.5) * 9
+        points.append((i / 39 * width, v))
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;display:block'>"]
+    path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
+    parts.append(f"<path d='{path}' fill='none' stroke='{MUTED}' stroke-width='1.5'/>")
+    parts.append(f"<line x1='0' y1='{height - 14}' x2='{width}' y2='34' stroke='{MUTED}' stroke-width='1' stroke-dasharray='4,4'/>")
     parts.append("</svg>")
     return "".join(parts)
 

@@ -65,13 +65,16 @@ def pace_status(target: float, actual: Optional[float], elapsed_period: float,
     }
 
 
-def _round_to_int_fields(result: dict, *fields: str) -> dict:
-    """Session counts are discrete - "expected 11.23 sessions" isn't a real
-    quantity a human would say. Applied by the specific caller (not inside
-    pace_status itself, which is shared by non-session quantities too)."""
+def _round_to_int_fields(result: dict, *fields: str, decimals: int = 1) -> dict:
+    """Session-count pace fields shouldn't show 2-decimal false precision
+    ("expected 11.23 sessions" isn't a quantity a human would say), but a
+    single decimal is still a real, useful "how far off" figure (matches
+    dashboard-prototype.html's "1.6 behind" / "0.1 ahead"). Applied by the
+    specific caller (not inside pace_status itself, which is shared by
+    non-session quantities too)."""
     for f in fields:
         if result.get(f) is not None:
-            result[f] = round(result[f])
+            result[f] = round(result[f], decimals)
     return result
 
 
@@ -555,6 +558,16 @@ def readiness(body_battery_wake: Optional[int], hrv_status: Optional[str],
     }
 
 
+def _baseline_resting_hr(conn, before: date, days: int = 30) -> Optional[float]:
+    start = before - timedelta(days=days)
+    rows = db.fetch_all_dicts(
+        conn,
+        "SELECT resting_hr FROM daily_metrics WHERE date >= ? AND date < ? AND resting_hr IS NOT NULL",
+        (start.isoformat(), before.isoformat()),
+    )
+    return sum(r["resting_hr"] for r in rows) / len(rows) if rows else None
+
+
 def readiness_today(conn, today: Optional[date] = None) -> dict:
     today = today or config.local_today()
     row = db.fetch_all_dicts(
@@ -562,16 +575,7 @@ def readiness_today(conn, today: Optional[date] = None) -> dict:
     )
     row = row[0] if row else {}
 
-    baseline_start = today - timedelta(days=30)
-    baseline_rows = db.fetch_all_dicts(
-        conn,
-        "SELECT resting_hr FROM daily_metrics WHERE date >= ? AND date < ? AND resting_hr IS NOT NULL",
-        (baseline_start.isoformat(), today.isoformat()),
-    )
-    baseline = (
-        sum(r["resting_hr"] for r in baseline_rows) / len(baseline_rows)
-        if baseline_rows else None
-    )
+    baseline = _baseline_resting_hr(conn, today)
 
     result = readiness(
         row.get("body_battery_wake"),  # real wake-time reading now (nearest intraday
@@ -634,6 +638,8 @@ def yesterday_summary(conn, today: Optional[date] = None) -> dict:
         (yesterday.isoformat(),),
     )
 
+    baseline_resting_hr = _baseline_resting_hr(conn, yesterday)
+
     return {
         "date": yesterday.isoformat(),
         "steps": row.get("steps"),
@@ -646,6 +652,8 @@ def yesterday_summary(conn, today: Optional[date] = None) -> dict:
         "active_calories_avg_7d": _trailing_avg(conn, "active_calories", yesterday),
         "sleep_hours": sleep_hours,
         "sleep_hours_avg_7d": sleep_avg_hours,
+        "resting_hr": row.get("resting_hr"),
+        "resting_hr_baseline_30d": round(baseline_resting_hr, 1) if baseline_resting_hr else None,
     }
 
 
@@ -1060,3 +1068,44 @@ def training_calendar_weeks(conn, today: Optional[date] = None, weeks: int = 26)
         d += timedelta(days=1)
 
     return {"start": start.isoformat(), "end": today.isoformat(), "days": days, "requested_weeks": weeks}
+
+
+def sessions_by_month(conn, months: int = 6, today: Optional[date] = None) -> list[dict]:
+    """Session counts by bucket, one row per calendar month, trailing N
+    months (current month included, partial)."""
+    today = today or config.local_today()
+    month_starts = []
+    cursor = today.replace(day=1)
+    for _ in range(months):
+        month_starts.append(cursor)
+        cursor = (cursor - timedelta(days=1)).replace(day=1)
+    month_starts.reverse()
+
+    rows = []
+    for m_start in month_starts:
+        next_month = (m_start.replace(day=28) + timedelta(days=4)).replace(day=1)
+        m_end = min(next_month - timedelta(days=1), today)
+        counts = db.fetch_all_dicts(
+            conn, "SELECT bucket, COUNT(*) as n FROM activities WHERE date >= ? AND date <= ? GROUP BY bucket",
+            (m_start.isoformat(), m_end.isoformat()),
+        )
+        by_bucket = {r["bucket"]: r["n"] for r in counts}
+        rows.append({
+            "month_label": m_start.strftime("%B"),
+            "strength": by_bucket.get("strength", 0),
+            "racquet": by_bucket.get("racquet", 0),
+            "cardio": by_bucket.get("cardio", 0),
+            "total": sum(by_bucket.values()),
+        })
+    return rows
+
+
+def weekly_calories_dominant_bucket(wc: dict) -> Optional[dict]:
+    """Which bucket carries the plurality of logged active calories across
+    the displayed window - feeds the chart's computed-finding title."""
+    totals = {b: sum(wc["data"][b]) for b in wc["buckets"]}
+    grand_total = sum(totals.values())
+    if grand_total <= 0:
+        return None
+    top_bucket = max(totals, key=totals.get)
+    return {"bucket": top_bucket, "pct": round(totals[top_bucket] / grand_total * 100)}

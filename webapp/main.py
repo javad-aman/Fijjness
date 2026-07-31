@@ -70,14 +70,16 @@ def _rail(label: str, pace: dict, unit: str = "", not_synced: bool = False) -> d
     fill_pct = min((actual / target) * 100, 100) if target and actual is not None else 0
     tick_pct = min((expected / target) * 100, 100) if target and expected is not None else 0
 
-    gap_label = None
-    if delta is not None:
+    gap_label, gap_class = None, "idle"
+    if not_synced:
+        gap_label = "awaiting sync"
+    elif delta is not None:
         if delta < 0:
-            gap_label = f"{abs(delta):,} behind"
+            gap_label, gap_class = f"{abs(delta):g} behind", "behind"
         elif delta > 0:
-            gap_label = f"{delta:,} ahead"
+            gap_label, gap_class = f"{delta:g} ahead", "ahead"
         else:
-            gap_label = "on pace"
+            gap_label, gap_class = "on pace", "idle"
 
     return {
         "label": label,
@@ -89,7 +91,23 @@ def _rail(label: str, pace: dict, unit: str = "", not_synced: bool = False) -> d
         "on_pace": pace["on_pace"],
         "not_synced": not_synced,
         "gap_label": gap_label,
+        "gap_class": gap_class,
+        # the gap zone (the shaded region between the fill and the expected
+        # tick) only makes sense when behind - "ahead" already reads clearly
+        # from the fill overshooting the tick.
+        "gapzone_left": min(fill_pct, tick_pct),
+        "gapzone_width": abs(tick_pct - fill_pct) if gap_class == "behind" else 0,
     }
+
+
+def _relative_time(dt: datetime, now: datetime) -> str:
+    delta = now - dt
+    hours = delta.total_seconds() / 3600
+    if hours < 1:
+        return f"{max(round(delta.total_seconds() / 60), 1)}m ago"
+    if hours < 48:
+        return f"{round(hours)}h ago"
+    return f"{round(hours / 24)}d ago"
 
 
 def _split_brief_action(text: str) -> tuple[str, str]:
@@ -154,8 +172,11 @@ def today(request: Request):
         last_sync_at = snapshot["sync_status"]["sources"]["daily_metrics"]["last_sync_at"]
         last_synced_label = None
         if last_sync_at:
-            local_time = datetime.fromisoformat(last_sync_at).astimezone(config.LOCAL_TZ)
-            last_synced_label = f"synced {local_time.strftime('%I:%M%p').lstrip('0').lower()}"
+            sync_dt_utc = datetime.fromisoformat(last_sync_at)
+            local_time = sync_dt_utc.astimezone(config.LOCAL_TZ)
+            now_local = datetime.now(config.LOCAL_TZ)
+            time_str = local_time.strftime("%H:%M")
+            last_synced_label = f"last sync {time_str} · {_relative_time(local_time, now_local)}"
 
         # ---- Steps, 30 days ----
         steps_data = analytics.steps_30_day(conn, config.GOALS, today_date)
@@ -167,16 +188,22 @@ def today(request: Request):
                 "svg": charts.steps_30day_svg(steps_data),
                 "finding": f"You're averaging {steps_data['avg']:,} steps — "
                            f"{abs(steps_data['pct_vs_goal'])}% {'above' if steps_data['pct_vs_goal'] >= 0 else 'below'} goal",
-                "subtitle": f"{steps_data['range_start']} to {steps_data['range_end']}"
+                "subtitle": f"Daily steps · {charts._human_date(steps_data['range_start'])} – {charts._human_date(steps_data['range_end'])} · 7-day average overlaid"
                             + (f" · {steps_data['n_available']} of 30 days available" if steps_data["state"] == "partial" else ""),
             })
 
         # ---- Training calendar ----
         cal = analytics.training_calendar_weeks(conn, today_date)
+        n_training_days = sum(1 for d in cal["days"] if d["buckets"])
+        n_weeks_shown = -(-len(cal["days"]) // 7)
         calendar_module = {
             "svg": charts.training_calendar_weeks_svg(cal),
-            "subtitle": f"{cal['start']} to {cal['end']}",
+            "finding": f"{n_training_days} training days across {n_weeks_shown} weeks",
+            "subtitle": f"{charts._human_date(cal['start'])} – {charts._human_date(cal['end'])} · one cell per day",
         }
+
+        # ---- Sessions by month ----
+        month_rows = analytics.sessions_by_month(conn, today=today_date)
 
         # ---- Weekly calories ----
         wc = analytics.weekly_calories_with_total(conn, today=today_date)
@@ -184,9 +211,15 @@ def today(request: Request):
         if wc["state"] == "insufficient":
             calories_module["requirement"] = f"needs 3 complete weeks, have {wc['complete_weeks']}"
         else:
+            dominant = analytics.weekly_calories_dominant_bucket(wc)
+            finding = (
+                f"{dominant['bucket'].capitalize()} carries {dominant['pct']}% of your logged active calories"
+                if dominant else "Weekly active calories by type"
+            )
             calories_module.update({
                 "svg": charts.stacked_bar_svg(wc, total_line=wc["total_active_calories"], stretch=True),
-                "subtitle": f"{wc['week_labels'][0]} to {wc['week_labels'][-1]}"
+                "finding": finding,
+                "subtitle": "Weekly active calories by type · last 12 weeks"
                             + (f" · {wc['complete_weeks']} of 12 weeks available" if wc["state"] == "partial" else ""),
             })
 
@@ -200,11 +233,11 @@ def today(request: Request):
             hr_band_low = (hr["mean_30d"] - hr["sd_30d"]) if hr["mean_30d"] is not None else None
             hr_band_high = (hr["mean_30d"] + hr["sd_30d"]) if hr["mean_30d"] is not None else None
             recovery_module.update({
-                "subtitle": f"{rs['range_start']} to {rs['range_end']}",
-                "hr_svg": charts.sparkline_svg(hr["points"], band_low=hr_band_low, band_high=hr_band_high),
-                "hr_current": hr["current"],
-                "sleep_svg": charts.sparkline_svg(sleep["points"], band_low=sleep["band_low"], band_high=sleep["band_high"]),
-                "sleep_current": sleep["current"],
+                "subtitle": f"Resting HR and sleep · {charts._human_date(rs['range_start'])} – {charts._human_date(rs['range_end'])} · shaded band = normal range",
+                "hr_svg": charts.sparkline_svg(hr["points"], band_low=hr_band_low, band_high=hr_band_high,
+                                                label="Resting HR", unit="bpm", current=hr["current"]),
+                "sleep_svg": charts.sparkline_svg(sleep["points"], band_low=sleep["band_low"], band_high=sleep["band_high"],
+                                                   label="Sleep", unit="hours", current=sleep["current"]),
             })
 
         # ---- Weight ----
@@ -215,6 +248,7 @@ def today(request: Request):
                 "n_readings": wt["n_readings"], "since": wt["since"],
                 "min_readings": wt["min_readings"], "min_span_days": wt["min_span_days"],
                 "checkpoint": wt["checkpoint"],
+                "ghost_svg": charts.ghost_preview_svg(),
             })
         else:
             weight_module.update({
@@ -230,7 +264,7 @@ def today(request: Request):
             "today.html",
             {
                 "active_page": "today",
-                "today_label": (today_date.strftime("%A, %B ") + str(today_date.day)).upper(),
+                "today_label": today_date.strftime("%A, %B ") + str(today_date.day),
                 "readiness": snapshot["readiness"],
                 "last_synced_label": last_synced_label,
                 "rails": rails,
@@ -238,6 +272,7 @@ def today(request: Request):
                 "brief_card": brief_card,
                 "steps_module": steps_module,
                 "calendar_module": calendar_module,
+                "month_rows": month_rows,
                 "calories_module": calories_module,
                 "recovery_module": recovery_module,
                 "weight_module": weight_module,
