@@ -65,11 +65,22 @@ def direct_sql_strength_count(conn, target_date) -> int:
 
 
 def direct_sql_racquet_count(conn, target_date) -> int:
-    week_start = target_date - timedelta(days=target_date.weekday())
+    # Racquet is monthly now too (goals.yaml's racquet.monthly_sessions) -
+    # same window as strength, not a calendar week.
+    month_start = target_date.replace(day=1)
     return db.fetch_all_dicts(
         conn, "SELECT COUNT(*) as n FROM activities WHERE date >= ? AND date <= ? AND bucket = 'racquet'",
-        (week_start.isoformat(), target_date.isoformat()),
+        (month_start.isoformat(), target_date.isoformat()),
     )[0]["n"]
+
+
+def direct_sql_steps_month_total(conn, target_date):
+    month_start = target_date.replace(day=1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT SUM(steps) as total FROM daily_metrics WHERE date >= ? AND date <= ? AND steps IS NOT NULL",
+        (month_start.isoformat(), target_date.isoformat()),
+    )
+    return round(rows[0]["total"]) if rows and rows[0]["total"] is not None else 0
 
 
 def direct_sql_steps(conn, target_date):
@@ -124,15 +135,21 @@ def main():
 
         dashboard = analytics.build_snapshot(fixture, config.GOALS, target)
         email = coach.build_metrics_snapshot(fixture, config.GOALS, target)
+        # Under the midnight-cutoff architecture, yesterday_summary(conn, D)
+        # covers D itself - there's only one canonical date now, not a
+        # separate "today" query to offset against (see config.snapshot_date
+        # and analytics.build_snapshot's docstrings).
+        yesterday_view = analytics.yesterday_summary(fixture, target)
 
-        sql_steps = direct_sql_steps(fixture, target)
-        dash_steps = dashboard["steps_pace"]["actual"]
-        steps_match = (
-            (sql_steps is None and dash_steps is None)
-            or (sql_steps is not None and dash_steps is not None and round(sql_steps / 100) * 100 == dash_steps)
-        )
-        check(f"steps ({target}): dashboard rounds direct SQL correctly", steps_match,
-              f"sql={sql_steps} dashboard_rounded={dash_steps}")
+        sql_steps_month = direct_sql_steps_month_total(fixture, target)
+        check(f"steps month total ({target}): dashboard == direct SQL",
+              dashboard["steps_pace"]["actual"] == sql_steps_month,
+              f"dashboard={dashboard['steps_pace']['actual']} sql={sql_steps_month}")
+
+        sql_steps_day = direct_sql_steps(fixture, target)
+        check(f"yesterday steps ({target}): yesterday_summary == direct SQL",
+              yesterday_view["steps"] == sql_steps_day,
+              f"yesterday_summary={yesterday_view['steps']} sql={sql_steps_day}")
 
         sql_strength = direct_sql_strength_count(fixture, target)
         check(f"strength count ({target}): dashboard == email == direct SQL",
@@ -145,7 +162,6 @@ def main():
               f"dashboard={dashboard['racquet_pace']['actual']} email={email['racquet_pace']['actual']} sql={sql_racquet}")
 
         sql_active_cal = direct_sql_active_calories(fixture, target)
-        yesterday_view = analytics.yesterday_summary(fixture, target + timedelta(days=1))
         check(f"active_calories ({target}): yesterday_summary == direct SQL",
               yesterday_view["active_calories"] == sql_active_cal,
               f"yesterday_summary={yesterday_view['active_calories']} sql={sql_active_cal}")
