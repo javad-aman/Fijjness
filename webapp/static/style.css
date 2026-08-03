@@ -1,19 +1,25 @@
 :root {
   --ground: #0E1116;
   --surface: #171C24;
-  --line: #262D38;
-  --line-soft: #1E242E;
-  --text: #E8EAED;
-  --muted: #7C8794;
-  --dim: #4A535F;
+  --raise: #1C222C;
+  --line: #2E3644;
+  --line-soft: #232A35;
+  --text: #EDEFF2;
+  --muted: #A3AEBC;  /* contrast raised - the old #7C8794 read too dim on --ground */
+  --dim: #7C8794;
   --ahead: #4FD1A5;
-  --behind: #F2545B;
-  --neutral: #6C8EFF;
-  /* Not in the original 8-color spec palette (which only defines ahead/behind
-     for pace state) - readiness needs a 3rd state, so this amber sits at a
-     similar lightness/saturation to ahead/behind to read as part of the
-     same system rather than a bolted-on color. */
-  --amber: #F2A93B;
+  --behind: #FF6B72;
+  --warn: #E0A458;
+  --neutral: #7C9BFF;
+  --amber: #E0A458;  /* kept as an alias - readiness's amber state predates --warn */
+  /* Bucket colors for session-type charts. Racquet is deliberately NOT
+     --ahead (dashboard-prototype-v3.html reuses --ahead green for
+     --b-racquet; kept distinct here so green/red stay exclusively pace
+     signals - see webapp/charts.py's BUCKET_COLORS for the same call). */
+  --b-strength: #7C9BFF;
+  --b-racquet: #2FB8C6;
+  --b-cardio: #E0A458;
+  --b-unlogged: #49566A;
 }
 
 * {
@@ -30,7 +36,7 @@ html, body {
   line-height: 1.6;
 }
 
-.mono, .mono-num, .pace-rail-numbers, .big-number {
+.mono, .mono-num, .big-number {
   font-family: 'IBM Plex Mono', ui-monospace, monospace;
   font-variant-numeric: tabular-nums;
 }
@@ -93,138 +99,6 @@ a {
   outline-offset: 2px;
 }
 
-/* ---- Readiness strip ---- */
-
-.readiness-strip {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  font-size: 14px;
-}
-
-.readiness-dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-.readiness-dot[data-state="green"]   { background: var(--ahead); }
-.readiness-dot[data-state="amber"]   { background: var(--amber); }
-.readiness-dot[data-state="red"]     { background: var(--behind); }
-.readiness-dot[data-state="unknown"] { background: var(--muted); }
-
-.readiness-label {
-  font-family: 'Archivo', sans-serif;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  font-size: 13px;
-}
-.readiness-label[data-state="green"]   { color: var(--ahead); }
-.readiness-label[data-state="amber"]   { color: var(--amber); }
-.readiness-label[data-state="red"]     { color: var(--behind); }
-.readiness-label[data-state="unknown"] { color: var(--muted); }
-
-.readiness-detail {
-  color: var(--muted);
-}
-
-/* ---- Pace rail (the signature component) ---- */
-
-.pace-rail {
-  margin-bottom: 0;
-}
-
-.pace-rail-label {
-  margin-bottom: 8px;
-}
-
-.pace-rail-track {
-  position: relative;
-  height: 3px;
-  background: var(--line);
-  border-radius: 2px;
-  margin: 18px 0 20px;
-}
-
-.pace-rail-fill {
-  position: absolute;
-  left: 0;
-  top: 0;
-  height: 100%;
-  border-radius: 2px;
-  width: 0%; /* animated to --fill-pct via JS-added .is-animated class */
-  background: var(--ahead);
-}
-.pace-rail[data-on-pace="false"] .pace-rail-fill {
-  background: var(--behind);
-}
-.pace-rail-fill.is-animated {
-  width: var(--fill-pct);
-  transition: width 400ms ease-out;
-}
-
-/* The gap between actual and expected - the thing you should see first on
-   an off-pace rail, not just infer from where the fill happens to end. */
-.pace-rail-gapzone {
-  position: absolute;
-  top: -3px;
-  height: 9px;
-  background: repeating-linear-gradient(90deg, rgba(242, 84, 91, 0.34) 0 2px, transparent 2px 5px);
-}
-
-.pace-rail-tick {
-  position: absolute;
-  left: var(--tick-pct);
-  top: -7px;
-  width: 2px;
-  height: 17px;
-  background: var(--text);
-  transform: translateX(-1px);
-}
-
-.pace-rail-tick-label {
-  position: absolute;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 9.5px;
-  letter-spacing: 0.07em;
-  text-transform: uppercase;
-  color: var(--muted);
-  white-space: nowrap;
-}
-
-.pace-rail-numbers {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-}
-.pace-rail-numbers b {
-  font-family: 'IBM Plex Mono', monospace;
-  font-weight: 600;
-  font-size: 34px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-}
-.pace-rail-numbers b.idle {
-  font-size: 18px;
-  font-weight: 400;
-  color: var(--dim);
-}
-.pace-rail-numbers .muted {
-  font-size: 13px;
-  color: var(--muted);
-  font-family: 'Inter', sans-serif;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .pace-rail-fill {
-    transition: none !important;
-  }
-}
-
 /* ---- Yesterday rows ---- */
 
 .row {
@@ -279,67 +153,78 @@ a {
 
 @media (max-width: 400px) {
   .container { padding: 16px 14px 48px; }
-  .pace-rail-numbers { font-size: 18px; }
 }
 
-/* ---- Today dashboard grid (full-width redesign) ------------------------
-   Scoped to the Today page only (container--wide / dashboard-grid), so
-   Activity and Insights keep their existing 560px single-column layout
-   unchanged. Built to match dashboard-prototype.html. */
+/* ---- Today dashboard (v3 rebuild) ---------------------------------------
+   Scoped to the Today page only (container--wide / .grid), so Activity and
+   Insights keep their existing 560px single-column layout and base .card/
+   .eyebrow/.chart-title styling unchanged. Matches
+   dashboard-prototype-v3.html module by module. */
 
 .container--wide {
   max-width: 1920px;
-  padding: 24px 32px 64px;
+  padding: 20px 32px 64px;
 }
 @media (max-width: 700px) {
   .container--wide { padding: 16px 16px 40px; }
 }
 
-.dashboard-grid {
+.header {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  flex-wrap: wrap;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+  margin-bottom: 20px;
+}
+.header .date {
+  font-family: 'Archivo', sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: -0.015em;
+}
+.header .through {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: var(--muted);
+}
+.header .sync {
+  margin-left: auto;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  color: var(--dim);
+}
+
+.grid {
   display: grid;
   grid-template-columns: repeat(12, 1fr);
   gap: 20px;
   align-items: start;
 }
-
-.g-full      { grid-column: 1 / -1; }
-.g-brief     { grid-column: 1 / 6; }
-.g-rails     { grid-column: 6 / 13; }
-.g-steps     { grid-column: 1 / 9; }
-.g-yesterday { grid-column: 9 / 13; }
-.g-calendar  { grid-column: 1 / 9; }
-.g-monthtbl  { grid-column: 9 / 13; }
-.g-calories  { grid-column: 1 / 8; }
-.g-recovery  { grid-column: 8 / 13; }
-
+.c4  { grid-column: span 4; }
+.c5  { grid-column: span 5; }
+.c6  { grid-column: span 6; }
+.c7  { grid-column: span 7; }
+.c8  { grid-column: span 8; }
+.c12 { grid-column: span 12; }
 @media (max-width: 1400px) {
-  .g-brief, .g-rails, .g-steps, .g-yesterday, .g-calendar, .g-monthtbl, .g-calories, .g-recovery {
-    grid-column: 1 / -1;
-  }
+  .c4, .c5, .c6, .c7, .c8 { grid-column: span 12; }
 }
 
-.dashboard-grid .card {
+.grid .card {
   padding: 20px;
   margin-bottom: 0;
   border: none;
   border-radius: 6px;
 }
-
-.dashboard-grid .section-label {
-  font-family: 'Archivo', sans-serif;
-  font-weight: 600;
-  font-size: 11px;
-  letter-spacing: 0.08em;
+.grid .eyebrow {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 400;
+  font-size: 11.5px;
+  letter-spacing: 0.09em;
   text-transform: uppercase;
   color: var(--muted);
-  margin-bottom: 10px;
-}
-
-.figure-large {
-  font-family: 'IBM Plex Mono', ui-monospace, monospace;
-  font-variant-numeric: tabular-nums;
-  font-size: 44px;
-  line-height: 1.1;
 }
 
 .chart-title {
@@ -347,214 +232,50 @@ a {
   font-weight: 600;
   font-size: 16px;
   letter-spacing: -0.01em;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
 }
-.chart-subtitle {
+.chart-sub {
   font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
+  font-size: 11.5px;
   color: var(--dim);
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
+.chart-frame { width: 100%; }
 
-/* Fixed heights per spec sec.1 - charts read as instruments, not strips */
-.chart-frame-steps { height: 260px; }
-.chart-frame-weight { height: 240px; }
-.sparkline-frame { height: 92px; }
+/* ---- Empty / insufficient-data states ---- */
 
-.insufficient-frame {
+.empty {
   display: flex;
-  gap: 34px;
+  gap: 26px;
   align-items: center;
   flex-wrap: wrap;
 }
-.insufficient-frame .txt { flex: 1 1 340px; }
-.insufficient-frame h3 {
+.empty .txt { flex: 1 1 300px; }
+.empty h3 {
   font-family: 'Archivo', sans-serif;
   font-weight: 600;
   font-size: 16px;
   margin: 0 0 7px;
 }
-.insufficient-frame p {
+.empty p {
   color: var(--muted);
   font-size: 14px;
   max-width: 56ch;
-  margin: 0 0 16px;
+  margin: 0 0 15px;
 }
-.insufficient-frame .ghost { flex: 1 1 420px; opacity: 0.17; }
 
-/* ---- Row A: date + readiness chip + sync status ---- */
-
-.dashboard-header {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  flex-wrap: wrap;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 16px;
-  margin-bottom: 20px;
-}
-.dashboard-date {
-  font-family: 'Archivo', sans-serif;
-  font-weight: 700;
-  font-size: 21px;
-  letter-spacing: -0.015em;
-}
-.chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 9px;
-  background: var(--surface);
+.wrow { display: flex; gap: 8px; }
+.wrow input {
+  background: var(--raise);
   border: 1px solid var(--line);
-  border-radius: 999px;
-  padding: 6px 14px;
-}
-.chip .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
-.chip .dot[data-state="green"]   { background: var(--ahead); }
-.chip .dot[data-state="amber"]   { background: var(--amber); }
-.chip .dot[data-state="red"]     { background: var(--behind); }
-.chip .dot[data-state="unknown"] { background: var(--dim); }
-.chip .state {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.09em;
-  text-transform: uppercase;
-  color: var(--muted);
-}
-.chip .why { font-size: 13px; color: var(--dim); }
-.sync-status {
-  margin-left: auto;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
-  color: var(--dim);
-}
-
-/* ---- Coach brief card ---- */
-
-.brief-text {
-  font-size: 15px;
-  line-height: 1.62;
-  color: #D2D7DE;
-  margin-bottom: 14px;
-}
-.brief-action {
-  border-top: 1px solid var(--line);
-  padding-top: 14px;
-  margin-top: auto;
-  font-weight: 500;
+  border-radius: 4px;
+  padding: 9px 12px;
   color: var(--text);
-  font-size: 15px;
-}
-.brief-timestamp {
-  text-align: right;
   font-family: 'IBM Plex Mono', monospace;
-  color: var(--dim);
-  font-size: 10.5px;
-  margin-top: 10px;
+  font-size: 13px;
+  width: 92px;
 }
-
-/* ---- Pace rails ---- */
-
-.rails { display: flex; flex-direction: column; gap: 26px; }
-.rail-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  margin-bottom: 16px;
-}
-.gap-note {
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 11px;
-  letter-spacing: 0.04em;
-}
-.gap-note.behind { color: var(--behind); }
-.gap-note.ahead  { color: var(--ahead); }
-.gap-note.idle   { color: var(--dim); }
-
-.rail-val { display: flex; align-items: baseline; gap: 9px; }
-.rail-val b {
-  font-family: 'IBM Plex Mono', monospace;
-  font-weight: 600;
-  font-size: 34px;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.02em;
-}
-.rail-val em { font-style: normal; font-size: 13px; color: var(--muted); }
-.rail-val b.idle { font-size: 18px; font-weight: 400; color: var(--dim); }
-
-/* ---- Yesterday (vertical row list) ---- */
-
-.yst { display: flex; flex-direction: column; }
-.yst .yrow {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--line-soft);
-}
-.yst .yrow:last-child { border-bottom: 0; }
-.yst .v { font-family: 'IBM Plex Mono', monospace; font-size: 18px; font-variant-numeric: tabular-nums; }
-.yst .a { font-family: 'IBM Plex Mono', monospace; font-size: 11px; color: var(--dim); }
-.yst .none { color: var(--dim); font-size: 13.5px; padding: 13px 0; border-bottom: 1px solid var(--line-soft); }
-
-/* ---- Legend ---- */
-
-.chart-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; }
-.chart-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 10.5px;
-  color: var(--muted);
-}
-.chart-legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
-
-/* ---- Sessions-by-month table ---- */
-
-.month-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-family: 'IBM Plex Mono', monospace;
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
-}
-.month-table th {
-  text-align: right;
-  font-weight: 500;
-  font-size: 10px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--dim);
-  padding: 0 0 9px;
-  border-bottom: 1px solid var(--line);
-}
-.month-table th:first-child { text-align: left; }
-.month-table td {
-  text-align: right;
-  padding: 10px 0;
-  border-bottom: 1px solid var(--line-soft);
-  color: var(--text);
-}
-.month-table td:first-child { text-align: left; color: var(--muted); }
-.month-table tr:last-child td { border-bottom: 0; }
-
-/* ---- Weight log form ---- */
-
-.log-weight-form {
-  display: flex;
-  gap: 8px;
-  margin-top: 10px;
-}
-.log-weight-form input {
-  background: var(--ground);
-  border: 1px solid var(--line);
-  color: var(--text);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-family: 'IBM Plex Mono', monospace;
-  width: 90px;
-}
-.log-weight-form button {
+.btn {
   font-family: 'IBM Plex Mono', monospace;
   font-size: 11.5px;
   letter-spacing: 0.07em;
@@ -566,4 +287,217 @@ a {
   padding: 9px 18px;
   cursor: pointer;
 }
-.log-weight-form button:hover { border-color: var(--muted); }
+.btn:hover { border-color: var(--muted); }
+
+/* ---- Coach brief (labeled bullet groups) ---- */
+
+.brief { min-height: 330px; display: flex; flex-direction: column; }
+.bgroup { margin-bottom: 15px; }
+.blabel {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 6px;
+}
+.brief ul { list-style: none; margin: 0; padding: 0; }
+.brief li {
+  position: relative;
+  padding-left: 16px;
+  margin-bottom: 6px;
+  color: #DCE1E8;
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+.brief li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.brief li b {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+  color: var(--text);
+}
+.insight {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  margin-top: auto;
+}
+.insight .blabel { color: var(--warn); }
+.insight p { font-size: 14.5px; color: #DCE1E8; line-height: 1.55; }
+.stamp {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  color: var(--dim);
+  text-align: right;
+  margin-top: 12px;
+}
+
+/* ---- Pace rails ---- */
+
+.rails { display: flex; flex-direction: column; gap: 26px; }
+.rail-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  /* The "expected" tick label sits ~10-24px above .track (see .tick span
+     below) - this needs to clear that, not just the track's own margin,
+     or the label overlaps this row's text. */
+  margin-bottom: 34px;
+}
+.remain { font-family: 'IBM Plex Mono', monospace; font-size: 12px; letter-spacing: 0.03em; }
+.remain.behind { color: var(--behind); }
+.remain.ahead  { color: var(--ahead); }
+.remain.dead   { color: var(--dim); }
+
+.track {
+  position: relative;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+  margin-bottom: 18px;
+}
+.fill { position: absolute; top: 0; left: 0; height: 4px; border-radius: 2px; }
+.fill.behind { background: var(--behind); }
+.fill.ahead  { background: var(--ahead); }
+.fill.dead   { background: var(--dim); }
+.gapzone {
+  position: absolute;
+  top: -2px;
+  height: 8px;
+  border-radius: 2px;
+  background: repeating-linear-gradient(90deg, rgba(255, 107, 114, 0.5) 0 1.5px, transparent 1.5px 6px);
+}
+.tick { position: absolute; top: -7px; width: 2px; height: 18px; background: var(--text); }
+.tick span {
+  position: absolute;
+  bottom: 21px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 0.07em;
+  color: var(--muted);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.rail-foot { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.rail-val { display: flex; align-items: baseline; gap: 8px; }
+.rail-val b {
+  font-family: 'IBM Plex Mono', monospace;
+  font-weight: 600;
+  font-size: 31px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.rail-val b.sm { font-size: 24px; }
+.rail-val em { font-style: normal; font-size: 13.5px; color: var(--muted); }
+.rate { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+
+/* ---- Yesterday ---- */
+
+.yst .row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+.yst .row:last-child { border-bottom: 0; }
+.yst .lbl {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+.yst .v { font-family: 'IBM Plex Mono', monospace; font-size: 22px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.yst .d { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; padding: 2px 7px; border-radius: 3px; }
+.yst .d.up { color: var(--ahead); background: rgba(79, 209, 165, 0.13); }
+.yst .d.dn { color: var(--behind); background: rgba(255, 107, 114, 0.13); }
+.yst .tag {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  color: var(--warn);
+  background: rgba(224, 164, 88, 0.13);
+  padding: 3px 9px;
+  border-radius: 3px;
+  display: inline-block;
+}
+
+/* ---- Recovery bullets ---- */
+
+.rec { list-style: none; margin: 0; padding: 0; }
+.rec li { position: relative; padding-left: 16px; margin-bottom: 11px; font-size: 14.5px; color: #DCE1E8; line-height: 1.5; }
+.rec li::before { content: ""; position: absolute; left: 0; top: 9px; width: 5px; height: 5px; border-radius: 50%; }
+.rec li.bad::before  { background: var(--behind); }
+.rec li.warn::before { background: var(--warn); }
+.rec li.good::before { background: var(--ahead); }
+.rec li.info::before { background: var(--dim); }
+.rec b { font-family: 'IBM Plex Mono', monospace; font-weight: 600; }
+.verdict {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+  font-size: 14.5px;
+  color: var(--text);
+  font-weight: 500;
+}
+
+/* ---- Legend / stats row (shared by several chart cards) ---- */
+
+.legend { display: flex; gap: 18px; flex-wrap: wrap; margin-top: 14px; }
+.legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 11.5px;
+  color: var(--muted);
+}
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+.legend b { color: var(--text); font-weight: 600; }
+
+.stats { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 16px; }
+.stat .k {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--dim);
+  margin-bottom: 3px;
+}
+.stat .v { font-family: 'IBM Plex Mono', monospace; font-size: 23px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.stat .v.ok { color: var(--ahead); }
+
+/* ---- Hover tooltip (shared by every bar/point chart - see base.html) ---- */
+
+#tip {
+  position: fixed;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.1s;
+  background: #080B0F;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 11px;
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  color: var(--text);
+  white-space: pre;
+  z-index: 99;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+[data-tip] { cursor: crosshair; }
+@media (prefers-reduced-motion: reduce) {
+  #tip { transition: none; }
+}

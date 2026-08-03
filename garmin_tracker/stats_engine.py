@@ -196,7 +196,11 @@ def _partial_out_weekday(dates: list[date], values: np.ndarray) -> np.ndarray:
 def _block_length(residuals: np.ndarray, max_lag: int = 20) -> int:
     """First lag where the autocorrelation function drops below 0.2 -
     the moving-block bootstrap's block length, so resampling respects
-    however much day-to-day dependence the series actually has."""
+    however much day-to-day dependence the series actually has. This is
+    purely a resampling parameter - see _effective_sample_size for the
+    reported n_effective, which this must NOT be used to derive (n/block_len
+    degenerates to raw n whenever lag-1 autocorrelation happens to already
+    be low, even though real dependence can persist at later lags)."""
     if len(residuals) < 8:
         return 1
     acf_vals = acf(residuals, nlags=min(max_lag, len(residuals) // 2 - 1), fft=True)
@@ -204,6 +208,27 @@ def _block_length(residuals: np.ndarray, max_lag: int = 20) -> int:
         if abs(acf_vals[lag]) < 0.2:
             return max(lag, 1)
     return max(len(acf_vals) - 1, 1)
+
+
+def _effective_sample_size(residuals: np.ndarray, max_lag: int = 20) -> int:
+    """Bartlett-adjusted effective sample size: n_eff = n / tau, where
+    tau = 1 + 2*sum(rho_k) is the integrated autocorrelation time, summed
+    until the autocorrelation turns negative (the standard cutoff) or
+    max_lag is hit. Unlike n/block_len, this can't degenerate back to raw n
+    just because lag-1 autocorrelation happens to be low - it integrates
+    the whole positive-autocorrelation tail, so real day-to-day dependence
+    at lag 3, 5, 10 etc. still shrinks n_effective correctly."""
+    n = len(residuals)
+    if n < 8:
+        return n
+    acf_vals = acf(residuals, nlags=min(max_lag, n // 2 - 1), fft=True)
+    tau = 1.0
+    for k in range(1, len(acf_vals)):
+        rho = acf_vals[k]
+        if rho <= 0:
+            break
+        tau += 2 * rho
+    return max(int(n / tau), 1)
 
 
 def _moving_block_bootstrap_corr(x: np.ndarray, y: np.ndarray, block_len: int,
@@ -245,7 +270,10 @@ def test_lagged_hypothesis(dates: list[date], predictor: np.ndarray, outcome: np
     y_resid = _partial_out_weekday(dates, outcome)
 
     block_len = _block_length(y_resid)
-    n_effective = max(int(n / block_len), 1)
+    # Conservative: take whichever series has the longer autocorrelation
+    # tail (the smaller resulting n_effective), since either series'
+    # dependence structure can inflate the apparent sample size.
+    n_effective = min(_effective_sample_size(x_resid), _effective_sample_size(y_resid))
 
     observed_r = float(np.corrcoef(x_resid, y_resid)[0, 1]) if np.std(x_resid) and np.std(y_resid) else 0.0
     boot_corrs = _moving_block_bootstrap_corr(x_resid, y_resid, block_len, BOOTSTRAP_RESAMPLES, rng)

@@ -1,9 +1,12 @@
 steps:
-  daily_target: 7000
+  daily_target: 7000        # still used for daily-bar coloring (>= goal = ahead)
+  monthly_default: 240000
+  monthly_targets:          # per-month override, keyed YYYY-MM - a deliberately
+    2026-07: 240000         # lower target some month is a real goal, not a miss
 strength:
   monthly_sessions: 12
 racquet:
-  weekly_sessions: 2        # tennis or pickleball, any day - no day-of-week assumptions
+  monthly_sessions: 8       # was weekly_sessions: 2 - now monthly, no day-of-week assumptions
 weight:
   unit: lb
   checkpoints:

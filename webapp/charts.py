@@ -9,25 +9,30 @@ stylesheet reliably enough to depend on here).
 from __future__ import annotations
 
 GROUND = "#0E1116"
-LINE = "#262D38"
-LINE_SOFT = "#1E242E"
-TEXT = "#E8EAED"
-MUTED = "#7C8794"
-DIM = "#4A535F"
+RAISE = "#1C222C"
+LINE = "#2E3644"
+LINE_SOFT = "#232A35"
+TEXT = "#EDEFF2"
+MUTED = "#A3AEBC"
+DIM = "#7C8794"
 AHEAD = "#4FD1A5"
-BEHIND = "#F2545B"
-NEUTRAL = "#6C8EFF"
-AMBER = "#F2A93B"
+BEHIND = "#FF6B72"
+WARN = "#E0A458"
+NEUTRAL = "#7C9BFF"
+AMBER = WARN
 
 # ahead/behind are reserved exclusively for pace on/off-state (spec §9: "Green
 # and red mean on-pace and off-pace, nowhere else") - so categorical charts
-# below never use them, even though dashboard-prototype.html's own mock
-# reused --ahead green for "racquet". Buckets get 4 distinct non-pace hues.
+# below never use them for a bucket, even though dashboard-prototype-v3.html's
+# own mock reuses --ahead green for "racquet" (--b-racquet == --ahead there).
+# Racquet gets a distinct teal instead so pace color stays exclusively
+# meaningful; everything else matches the v3 palette exactly.
 BUCKET_COLORS = {
     "strength": NEUTRAL,
-    "racquet": "#E0A458",  # amber-orange
-    "cardio": "#8B7BB8",   # muted purple
-    "other": DIM,
+    "racquet": "#2FB8C6",  # teal - deliberately not --ahead, see above
+    "cardio": WARN,
+    "other": "#49566A",
+    "unlogged": "#49566A",
 }
 
 FONT = "font-family='IBM Plex Mono, ui-monospace, monospace'"
@@ -257,228 +262,6 @@ def heatmap_svg(cal: dict, width: int = 560) -> str:
     return "".join(parts)
 
 
-def steps_30day_svg(steps_data: dict, width: int = 900, height: int = 260) -> str:
-    """30 daily bars, goal reference line, 7d moving average overlay. Bars
-    ahead-of-goal in `ahead`, behind in `muted` (never `behind` red - a
-    single day under goal isn't a failure state, per spec §2.4). Missing
-    days render as gaps (no bar), never a zero-height bar. Today's slot
-    gets an outlined placeholder if not yet synced, rather than either a
-    fabricated bar or an indistinguishable gap."""
-    days = steps_data["days"]
-    goal = steps_data["goal"]
-    ma7 = steps_data["moving_avg_7d"]
-    n = len(days)
-    if n == 0:
-        return f"<svg width='{width}' height='{height}'></svg>"
-
-    values = [d["steps"] for d in days if d["steps"] is not None]
-    max_val = max(values + [goal]) * 1.1 if values else goal * 1.1
-
-    pad_left, pad_right, pad_bottom, pad_top = 8, 78, 22, 16
-    plot_w = width - pad_left - pad_right
-    plot_h = height - pad_bottom - pad_top
-    gap = plot_w / n
-    bar_w = gap * 0.6
-    y0 = pad_top + plot_h
-
-    def y_of(v: float) -> float:
-        return pad_top + plot_h - (v / max_val) * plot_h
-
-    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
-    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
-
-    # Reference gridlines at even fractions of the goal - orientation, not
-    # meant to be read precisely (per spec: sparkline-adjacent charts are
-    # for shape recognition first).
-    step_grid = goal / 2
-    grid_val = step_grid
-    while grid_val < max_val:
-        gy = y_of(grid_val)
-        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
-        grid_val += step_grid
-
-    goal_y = y_of(goal)
-    parts.append(
-        f"<line x1='{pad_left}' y1='{goal_y:.1f}' x2='{width - pad_right + 8}' y2='{goal_y:.1f}' "
-        f"stroke='{TEXT}' stroke-width='1' stroke-dasharray='3,3' opacity='0.55'/>"
-    )
-    parts.append(f"<text x='{width - pad_right + 12}' y='{goal_y + 4:.1f}' {LABEL_FONT} font-size='10.5' fill='{MUTED}'>goal {goal:,}</text>")
-
-    for i, day in enumerate(days):
-        x = pad_left + i * gap + (gap - bar_w) / 2
-        v = day["steps"]
-        is_last = i == n - 1
-        if v is None:
-            if is_last:
-                ph_h = 24
-                parts.append(
-                    f"<rect x='{x:.1f}' y='{y0 - ph_h:.1f}' width='{bar_w:.1f}' height='{ph_h}' "
-                    f"fill='none' stroke='{DIM}' stroke-width='1' stroke-dasharray='2,2' rx='1.5'/>"
-                )
-            continue
-        bar_h = max(1.0, (v / max_val) * plot_h)
-        color = AHEAD if v >= goal else DIM
-        parts.append(f"<rect x='{x:.1f}' y='{y0 - bar_h:.1f}' width='{bar_w:.1f}' height='{bar_h:.1f}' fill='{color}' rx='1.5'/>")
-
-    ma_points = [
-        (pad_left + i * gap + gap / 2, y_of(v)) for i, v in enumerate(ma7) if v is not None
-    ]
-    if len(ma_points) >= 2:
-        path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in ma_points)
-        parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='1.75' opacity='0.9'/>")
-
-    mid_i = n // 2
-    for i, anchor in ((0, "start"), (mid_i, "middle"), (n - 1, "end")):
-        x = pad_left + i * gap + bar_w / 2
-        parts.append(f"<text x='{x:.1f}' y='{height - 8}' {LABEL_FONT} font-size='10' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(days[i]['date']))}</text>")
-
-    parts.append("</svg>")
-    return "".join(parts)
-
-
-def training_calendar_weeks_svg(cal: dict, cell: int = 14, gap: int = 3) -> str:
-    """GitHub-style: columns = weeks, rows = weekdays (Mon top). Days before
-    real coverage began render nothing - not an empty cell. Multiple buckets
-    on one day split the cell diagonally. Weekday labels down the left edge,
-    month labels along the bottom (computed from real dates, not a fixed
-    cadence, so it holds up regardless of the actual window length)."""
-    days = cal["days"]
-    if not days:
-        return "<svg width='100' height='40'></svg>"
-
-    pad_left = 30
-    n_cols = -(-len(days) // 7)
-    width = pad_left + n_cols * (cell + gap)
-    height = 7 * (cell + gap) + 20
-
-    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:{width}px;height:auto;display:block'>"]
-    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
-
-    for label, row in (("Mon", 0), ("Wed", 2), ("Fri", 4)):
-        ly = row * (cell + gap) + 4 + cell - 2
-        parts.append(f"<text x='0' y='{ly}' {LABEL_FONT} font-size='10' fill='{DIM}'>{label}</text>")
-
-    last_month = None
-    for i, day in enumerate(days):
-        col = i // 7
-        row = i % 7
-        x = pad_left + col * (cell + gap)
-        y = row * (cell + gap) + 4
-
-        if row == 0 and not day["before_coverage"]:
-            month_label = day["date"][:7]  # YYYY-MM
-            if month_label != last_month:
-                month_name = _human_date(day["date"]).split()[0]
-                parts.append(f"<text x='{x}' y='{height - 4}' {LABEL_FONT} font-size='10' fill='{DIM}'>{_esc(month_name)}</text>")
-                last_month = month_label
-
-        if day["before_coverage"]:
-            continue
-        buckets = day["buckets"]
-        if not buckets:
-            parts.append(f"<rect x='{x}' y='{y}' width='{cell}' height='{cell}' rx='2' fill='{LINE}'/>")
-        elif len(buckets) == 1:
-            color = BUCKET_COLORS.get(buckets[0], MUTED)
-            parts.append(f"<rect x='{x}' y='{y}' width='{cell}' height='{cell}' rx='2' fill='{color}'/>")
-        else:
-            c1 = BUCKET_COLORS.get(buckets[0], MUTED)
-            c2 = BUCKET_COLORS.get(buckets[1], MUTED)
-            clip_id = f"cal-{i}"
-            parts.append(f"<clipPath id='{clip_id}'><rect x='{x}' y='{y}' width='{cell}' height='{cell}' rx='2'/></clipPath>")
-            parts.append(f"<g clip-path='url(#{clip_id})'>")
-            parts.append(f"<rect x='{x}' y='{y}' width='{cell}' height='{cell}' fill='{c1}'/>")
-            parts.append(f"<polygon points='{x + cell},{y} {x + cell},{y + cell} {x},{y + cell}' fill='{c2}'/>")
-            parts.append("</g>")
-
-    parts.append("</svg>")
-    return "".join(parts)
-
-
-def sparkline_svg(points: list, width: int = 900, height: int = 92,
-                   band_low: float = None, band_high: float = None,
-                   label: str = "", unit: str = "", current=None) -> str:
-    """A shape-recognition sparkline, not a precise-reading chart - no axis
-    labels beyond context. Points outside the shaded band get a dot; the
-    band is either a fixed reference range (sleep) or a mean+/-SD (resting
-    HR), whichever the caller passes. Label top-left, current value large
-    at the right - the number you actually came to read."""
-    if len(points) < 2:
-        return f"<svg width='{width}' height='{height}'></svg>"
-
-    values = [p["value"] for p in points]
-    lo, hi = min(values), max(values)
-    if band_low is not None:
-        lo = min(lo, band_low)
-    if band_high is not None:
-        hi = max(hi, band_high)
-    rng = (hi - lo) or 1
-
-    pad_top, pad_bottom, pad_right = 16, 14, 66
-    plot_w = width - pad_right
-    plot_h = height - pad_top - pad_bottom
-
-    def xy(i, v):
-        x = (i / (len(points) - 1)) * plot_w
-        y = pad_top + plot_h - ((v - lo) / rng) * plot_h
-        return x, y
-
-    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
-    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
-
-    if band_low is not None and band_high is not None:
-        _, y_top = xy(0, band_high)
-        _, y_bot = xy(0, band_low)
-        parts.append(f"<rect x='0' y='{y_top:.1f}' width='{plot_w:.1f}' height='{(y_bot - y_top):.1f}' fill='{NEUTRAL}' opacity='0.09'/>")
-
-    line_points = [xy(i, v) for i, v in enumerate(values)]
-    path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in line_points)
-    parts.append(f"<path d='{path}' fill='none' stroke='{TEXT}' stroke-width='1.4' opacity='0.78'/>")
-
-    if band_low is not None and band_high is not None:
-        for i, v in enumerate(values):
-            if v < band_low or v > band_high:
-                x, y = line_points[i]
-                parts.append(f"<circle cx='{x:.1f}' cy='{y:.1f}' r='2.2' fill='{AMBER}'/>")
-
-    if label:
-        parts.append(f"<text x='0' y='9' {LABEL_FONT} font-size='10' fill='{MUTED}'>{_esc(label)}</text>")
-    if current is not None:
-        parts.append(f"<text x='{width}' y='{pad_top + plot_h / 2 + 9:.1f}' {FONT} font-size='25' font-weight='600' fill='{TEXT}' text-anchor='end'>{_esc(current)}</text>")
-        if unit:
-            parts.append(f"<text x='{width}' y='{pad_top + plot_h / 2 + 24:.1f}' {LABEL_FONT} font-size='9.5' fill='{DIM}' text-anchor='end'>{_esc(unit)}</text>")
-
-    parts.append("</svg>")
-    return "".join(parts)
-
-
-def ghost_preview_svg(width: int = 420, height: int = 110) -> str:
-    """Decorative-only faint preview for the weight module's insufficient-
-    data empty state - suggests what the real chart will look like once
-    enough readings exist. Deterministic pseudo-random, not real data;
-    rendered at low opacity by the template's .ghost wrapper so it never
-    reads as an actual measurement."""
-    seed = 999
-
-    def rnd_seq(n, s):
-        state = s
-        for _ in range(n):
-            state = (state * 1664525 + 1013904223) % 4294967296
-            yield state / 4294967296
-
-    deltas = list(rnd_seq(40, seed))
-    points = []
-    for i in range(40):
-        v = height - 24 - (i * 0.9) + (deltas[i] - 0.5) * 9
-        points.append((i / 39 * width, v))
-
-    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;display:block'>"]
-    path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in points)
-    parts.append(f"<path d='{path}' fill='none' stroke='{MUTED}' stroke-width='1.5'/>")
-    parts.append(f"<line x1='0' y1='{height - 14}' x2='{width}' y2='34' stroke='{MUTED}' stroke-width='1' stroke-dasharray='4,4'/>")
-    parts.append("</svg>")
-    return "".join(parts)
-
-
 def weight_trend_svg(chart_series: list, checkpoint: dict, width: int = 900, height: int = 240) -> str:
     """Raw readings as faint dots, EWMA as the emphasized line, a straight
     trajectory to the checkpoint target, and (when available) a Theil-Sen
@@ -531,6 +314,384 @@ def weight_trend_svg(chart_series: list, checkpoint: dict, width: int = 900, hei
 
     parts.append(f"<text x='{pad_x}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}'>{_esc(dates[0])}</text>")
     parts.append(f"<text x='{pad_x + plot_w:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}' text-anchor='end'>{_esc(dates[-1])}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+# ---- v3 dashboard charts -------------------------------------------------
+# Every bar/point below carries a data-tip attribute; a single delegated
+# listener (see base.html) reads it on hover and positions the shared #tip
+# element - no per-chart JS, no charting library.
+
+def _tip(lines: list) -> str:
+    return _esc("\n".join(str(l) for l in lines))
+
+
+def steps_month_bars_svg(data: dict, width: int = 900, height: int = 250) -> str:
+    """Daily steps for the current month - no moving average (v3 removes
+    it). Ahead-of-goal bars in `ahead`, behind in `warn` (never muted grey -
+    a day under goal is a real signal, not a footnote). Goal and month-
+    average both drawn as labeled reference lines, direct on the chart."""
+    days = data["days"]
+    goal = data["goal"]
+    avg = data["daily_avg"]
+    n = len(days)
+    if n == 0:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    values = [d["steps"] for d in days if d["steps"] is not None]
+    max_val = max(values + [goal]) * 1.08 if values else goal * 1.08
+
+    pad_left, pad_right, pad_bottom, pad_top = 44, 84, 26, 14
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_bottom - pad_top
+    gap = plot_w / n
+    bar_w = gap * 0.6
+    y0 = pad_top + plot_h
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - (v / max_val) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round(max_val / 4 / 1000) * 1000, 1000)
+    g = grid_step
+    while g < max_val:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g/1000:.1f}k</text>")
+        g += grid_step
+
+    for i, day in enumerate(days):
+        v = day["steps"]
+        if v is None:
+            continue
+        x = pad_left + i * gap + (gap - bar_w) / 2
+        bar_h = max(1.0, (v / max_val) * plot_h)
+        color = AHEAD if v >= goal else WARN
+        d = _human_date(day["date"])
+        tip = _tip([d, f"{v:,} steps", f"{'+' if v >= goal else ''}{v - goal:,} vs goal"])
+        parts.append(
+            f"<rect data-tip='{tip}' x='{x:.1f}' y='{y0 - bar_h:.1f}' width='{bar_w:.1f}' height='{bar_h:.1f}' "
+            f"rx='2' fill='{color}' opacity='0.9'/>"
+        )
+
+    goal_y = y_of(goal)
+    parts.append(
+        f"<line x1='{pad_left}' y1='{goal_y:.1f}' x2='{width - pad_right + 8}' y2='{goal_y:.1f}' "
+        f"stroke='{TEXT}' stroke-width='1' stroke-dasharray='3,3' opacity='0.6'/>"
+    )
+    parts.append(f"<text x='{width - pad_right + 12}' y='{goal_y + 4:.1f}' {FONT} font-size='11' fill='{MUTED}'>goal {goal:,}</text>")
+
+    avg_y = y_of(avg)
+    parts.append(f"<line x1='{pad_left}' y1='{avg_y:.1f}' x2='{width - pad_right + 8}' y2='{avg_y:.1f}' stroke='{NEUTRAL}' stroke-width='1.5'/>")
+    parts.append(f"<text x='{width - pad_right + 12}' y='{avg_y + 4:.1f}' {FONT} font-size='11' fill='{NEUTRAL}'>your avg {avg:,}</text>")
+
+    mid_i = n // 2
+    for i, anchor in ((0, "start"), (mid_i, "middle"), (n - 1, "end")):
+        x = pad_left + i * gap + bar_w / 2
+        parts.append(f"<text x='{x:.1f}' y='{height - 8}' {LABEL_FONT} font-size='10' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(days[i]['date']))}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def daily_calories_month_svg(data: dict, width: int = 900, height: int = 220) -> str:
+    """Daily active calories for the current month, each bar colored by that
+    day's dominant session bucket (or the rest/unlogged color) - "calories
+    follow your sessions, not your steps."""
+    days = data["days"]
+    avg = data["daily_avg"]
+    n = len(days)
+    if n == 0:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    values = [d["active_calories"] for d in days]
+    max_val = max(values) * 1.1
+
+    pad_left, pad_right, pad_bottom, pad_top = 44, 12, 26, 14
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_bottom - pad_top
+    gap = plot_w / n
+    bar_w = gap * 0.6
+    y0 = pad_top + plot_h
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - (v / max_val) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round(max_val / 4 / 100) * 100, 100)
+    g = grid_step
+    while g < max_val:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g:,.0f}</text>")
+        g += grid_step
+
+    bucket_names = {"strength": "Strength", "racquet": "Racquet", "cardio": "Cardio", None: "Rest day"}
+    for i, day in enumerate(days):
+        v = day["active_calories"]
+        x = pad_left + i * gap + (gap - bar_w) / 2
+        bar_h = max(1.0, (v / max_val) * plot_h)
+        color = BUCKET_COLORS.get(day["bucket"], BUCKET_COLORS["unlogged"]) if day["bucket"] else BUCKET_COLORS["unlogged"]
+        d = _human_date(day["date"])
+        tip = _tip([d, f"{v:,} active cal", bucket_names.get(day["bucket"], "Rest day")])
+        parts.append(
+            f"<rect data-tip='{tip}' x='{x:.1f}' y='{y0 - bar_h:.1f}' width='{bar_w:.1f}' height='{bar_h:.1f}' "
+            f"rx='2' fill='{color}' opacity='0.9'/>"
+        )
+
+    avg_y = y_of(avg)
+    parts.append(f"<line x1='{pad_left}' y1='{avg_y:.1f}' x2='{width - pad_right}' y2='{avg_y:.1f}' stroke='{NEUTRAL}' stroke-width='1.5' stroke-dasharray='4,3'/>")
+    parts.append(f"<text x='{pad_left + 4}' y='{avg_y - 6:.1f}' {FONT} font-size='11' fill='{NEUTRAL}'>avg {avg:,}</text>")
+
+    for i, anchor in ((0, "start"), (n - 1, "end")):
+        x = pad_left + i * gap + bar_w / 2
+        parts.append(f"<text x='{x:.1f}' y='{height - 8}' {LABEL_FONT} font-size='10' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(days[i]['date']))}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def monthly_steps_bars_svg(rows: list, width: int = 520, height: int = 240) -> str:
+    """Total steps by month, trailing 6 months - value label above each bar,
+    each bar's own target drawn as a short tick (targets can differ month to
+    month per goals.yaml, so one flat line across all six would misstate
+    the months that don't share July's target)."""
+    n = len(rows)
+    if n == 0:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    max_val = max(max(r["steps"] for r in rows), max(r["target"] for r in rows)) * 1.15
+    pad_left, pad_right, pad_bottom, pad_top = 48, 12, 28, 26
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_bottom - pad_top
+    gap = plot_w / n
+    bar_w = gap * 0.62
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - (v / max_val) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round(max_val / 3 / 50000) * 50000, 50000)
+    g = grid_step
+    while g < max_val:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g/1000:.0f}k</text>")
+        g += grid_step
+
+    for i, r in enumerate(rows):
+        x = pad_left + i * gap + (gap - bar_w) / 2
+        bar_h = max(1.0, (r["steps"] / max_val) * plot_h)
+        y = pad_top + plot_h - bar_h
+        color = AHEAD if r["cleared"] else WARN
+        over = r["steps"] - r["target"]
+        tip = _tip([r["month_label"], f"{r['steps']:,} steps", f"target {r['target']:,}", f"{'+' if over >= 0 else ''}{over:,} vs target"])
+        parts.append(f"<rect data-tip='{tip}' x='{x:.1f}' y='{y:.1f}' width='{bar_w:.1f}' height='{bar_h:.1f}' rx='2' fill='{color}' opacity='0.9'/>")
+        parts.append(f"<text x='{x + bar_w/2:.1f}' y='{y - 8:.1f}' {FONT} font-size='11.5' font-weight='600' fill='{TEXT}' text-anchor='middle'>{round(r['steps']/1000)}k</text>")
+        target_y = y_of(r["target"])
+        parts.append(f"<line x1='{x:.1f}' y1='{target_y:.1f}' x2='{x + bar_w:.1f}' y2='{target_y:.1f}' stroke='{TEXT}' stroke-width='1' stroke-dasharray='2,2' opacity='0.6'/>")
+        parts.append(f"<text x='{x + bar_w/2:.1f}' y='{height - 10}' {LABEL_FONT} font-size='11' fill='{MUTED}' text-anchor='middle'>{_esc(r['month_label'])}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def sessions_month_stacked_svg(rows: list, width: int = 520, height: int = 240) -> str:
+    """Sessions by month, stacked by bucket - count printed inside each
+    segment tall enough to hold it, total printed above the stack."""
+    n = len(rows)
+    if n == 0:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    max_val = max(r["strength"] + r["racquet"] + r["cardio"] for r in rows) * 1.15 or 1
+    pad_left, pad_right, pad_bottom, pad_top = 32, 12, 28, 26
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_bottom - pad_top
+    gap = plot_w / n
+    bar_w = gap * 0.62
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - (v / max_val) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round(max_val / 3 / 5) * 5, 5)
+    g = grid_step
+    while g < max_val:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g:.0f}</text>")
+        g += grid_step
+
+    segments = [("strength", "Strength"), ("racquet", "Racquet"), ("cardio", "Cardio")]
+    for i, r in enumerate(rows):
+        x = pad_left + i * gap + (gap - bar_w) / 2
+        acc = 0
+        total = r["strength"] + r["racquet"] + r["cardio"]
+        for key, name in segments:
+            v = r[key]
+            if not v:
+                continue
+            y_top = y_of(acc + v)
+            y_bot = y_of(acc)
+            seg_h = y_bot - y_top
+            tip = _tip([f"{r['month_label']} · {name}", f"{v} sessions"])
+            parts.append(f"<rect data-tip='{tip}' x='{x:.1f}' y='{y_top:.1f}' width='{bar_w:.1f}' height='{seg_h:.1f}' fill='{BUCKET_COLORS[key]}' opacity='0.9'/>")
+            if seg_h > 15:
+                parts.append(f"<text x='{x + bar_w/2:.1f}' y='{y_top + seg_h/2 + 4:.1f}' {FONT} font-size='11.5' font-weight='600' fill='{GROUND}' text-anchor='middle'>{v}</text>")
+            acc += v
+        top_y = y_of(total)
+        parts.append(f"<text x='{x + bar_w/2:.1f}' y='{top_y - 8:.1f}' {FONT} font-size='11.5' font-weight='600' fill='{TEXT}' text-anchor='middle'>{total}</text>")
+        parts.append(f"<text x='{x + bar_w/2:.1f}' y='{height - 10}' {LABEL_FONT} font-size='11' fill='{MUTED}' text-anchor='middle'>{_esc(r['month_label'])}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def monthly_calories_stacked_svg(rows: list, width: int = 520, height: int = 240) -> str:
+    """Monthly active calories stacked by source (racquet/strength/cardio/
+    unlogged movement) - where the burn actually comes from."""
+    n = len(rows)
+    if n == 0:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    max_val = max(r["total"] for r in rows) * 1.15 or 1
+    pad_left, pad_right, pad_bottom, pad_top = 48, 12, 28, 26
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_bottom - pad_top
+    gap = plot_w / n
+    bar_w = gap * 0.62
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - (v / max_val) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round(max_val / 3 / 5000) * 5000, 5000)
+    g = grid_step
+    while g < max_val:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g/1000:.0f}k</text>")
+        g += grid_step
+
+    segments = [("racquet", "Racquet"), ("strength", "Strength"), ("cardio", "Cardio"), ("unlogged", "Unlogged movement")]
+    for i, r in enumerate(rows):
+        x = pad_left + i * gap + (gap - bar_w) / 2
+        acc = 0
+        for key, name in segments:
+            v = r[key]
+            if not v:
+                continue
+            y_top = y_of(acc + v)
+            y_bot = y_of(acc)
+            pct = round(v / r["total"] * 100) if r["total"] else 0
+            tip = _tip([f"{r['month_label']} · {name}", f"{v:,} cal · {pct}%"])
+            parts.append(f"<rect data-tip='{tip}' x='{x:.1f}' y='{y_top:.1f}' width='{bar_w:.1f}' height='{(y_bot - y_top):.1f}' fill='{BUCKET_COLORS[key]}' opacity='0.9'/>")
+            acc += v
+        top_y = y_of(r["total"])
+        parts.append(f"<text x='{x + bar_w/2:.1f}' y='{top_y - 8:.1f}' {FONT} font-size='11.5' font-weight='600' fill='{TEXT}' text-anchor='middle'>{round(r['total']/1000)}k</text>")
+        parts.append(f"<text x='{x + bar_w/2:.1f}' y='{height - 10}' {LABEL_FONT} font-size='11' fill='{MUTED}' text-anchor='middle'>{_esc(r['month_label'])}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def month_calendar_svg(cal: dict, width: int = 420) -> str:
+    """One cell per day of the current month through snapshot_date, colored
+    by dominant bucket, numbered, weekday-aligned (columns = weeks, rows =
+    weekdays Mon-Sun, matching the actual calendar)."""
+    days = cal["days"]
+    if not days:
+        return f"<svg width='{width}' height='40'></svg>"
+
+    from datetime import date as _date
+    month_start = _date.fromisoformat(cal["month_start"])
+    weekday_offset = month_start.weekday()  # Monday=0
+
+    n_cols = -(-(weekday_offset + len(days)) // 7)
+    pad_left = 34
+    cell = min(46, max(20, int((width - pad_left - 8) / n_cols) - 6))
+    gap = 6
+    height = 7 * (cell + gap) + 8
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    for i, label in enumerate(dow):
+        parts.append(f"<text x='0' y='{i * (cell + gap) + cell/2 + 4:.1f}' {FONT} font-size='11' fill='{DIM}'>{label}</text>")
+
+    bucket_names = {"strength": "Strength", "racquet": "Racquet", "cardio": "Cardio", None: "Rest day"}
+    for i, day in enumerate(days):
+        idx = weekday_offset + i
+        col = idx // 7
+        row = idx % 7
+        x = pad_left + col * (cell + gap)
+        y = row * (cell + gap)
+        bucket = day["bucket"]
+        color = BUCKET_COLORS.get(bucket, BUCKET_COLORS["unlogged"]) if bucket else BUCKET_COLORS["unlogged"]
+        day_num = int(day["date"][-2:])
+        tip = _tip([_human_date(day["date"]), bucket_names.get(bucket, "Rest day")])
+        parts.append(f"<rect data-tip='{tip}' x='{x:.1f}' y='{y:.1f}' width='{cell}' height='{cell}' rx='4' fill='{color}' opacity='{0.9 if bucket else 0.55}'/>")
+        text_color = GROUND if bucket else MUTED
+        parts.append(f"<text x='{x + cell/2:.1f}' y='{y + cell/2 + 4:.1f}' {FONT} font-size='11.5' font-weight='{600 if bucket else 400}' fill='{text_color}' text-anchor='middle'>{day_num}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def weight_raw_points_svg(points: list, width: int = 420, height: int = 130) -> str:
+    """Raw weight readings as plain dots - no line drawn, per v3, until
+    there's enough data for a trend (that threshold is enforced by
+    weight_chart_data, not here; this just draws whatever it's given)."""
+    if not points:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    values = [p["weight_lb"] for p in points]
+    lo, hi = min(values), max(values)
+    pad_val = (hi - lo) * 0.15 or 2
+    lo, hi = lo - pad_val, hi + pad_val
+
+    pad_left, pad_right, pad_top, pad_bottom = 8, 44, 16, 22
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+    n = len(points)
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - ((v - lo) / (hi - lo)) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round((hi - lo) / 3), 1)
+    g = (int(lo / grid_step) + 1) * grid_step
+    while g < hi:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{width - pad_right + 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}'>{g:.0f}</text>")
+        g += grid_step
+
+    for i, p in enumerate(points):
+        x = pad_left + (i / max(n - 1, 1)) * plot_w
+        y = y_of(p["weight_lb"])
+        tip = _tip([_human_date(p["date"]), f"{p['weight_lb']} lb"])
+        parts.append(f"<circle data-tip='{tip}' cx='{x:.1f}' cy='{y:.1f}' r='4' fill='{MUTED}'/>")
+        if i == 0 or i == n - 1 or n <= 6:
+            anchor = "start" if i == 0 else "end" if i == n - 1 else "middle"
+            parts.append(f"<text x='{x:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9.5' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(p['date']))}</text>")
+
+    parts.append(f"<text x='{pad_left}' y='11' {LABEL_FONT} font-size='10' fill='{DIM}'>{n} reading{'s' if n != 1 else ''} · no line drawn until 8</text>")
 
     parts.append("</svg>")
     return "".join(parts)

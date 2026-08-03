@@ -37,8 +37,52 @@ Tone: analytical by default - reason from the numbers and cite them. When the
 athlete is behind pace or repeating a known pattern, say so bluntly. No
 cheerleading, no filler openers.
 
+Output format - exactly these four labeled bullet groups, in this order,
+using these literal headers verbatim. Format each header as its own markdown
+line, exactly `### HEADER TEXT` (a level-3 heading, all caps, nothing else on
+that line), so the sections can be parsed out programmatically. Every bullet
+under a header is its own line starting with `- `. Each group is a handful
+of short bullets, not a prose paragraph. Omit a group entirely (heading line
+included) if it has nothing genuine to say - a placeholder restating another
+group's number is worse than a missing section.
+
+### WHERE YOU STAND
+- One bullet per pace rail (steps_pace, strength_pace, racquet_pace) that
+  isn't in the "cleared" state: sessions/steps remaining and days remaining,
+  as plain integers only. "2 left - 1 day" is correct; "1.6 behind" is a bug
+  - never print a fraction for a countable quantity.
+- A rail in the "dead" state is not reachable this month (required_rate
+  exceeds what the athlete has actually sustained in the last 90 days) - say
+  so plainly and move on; don't urge a rate the data says isn't happening.
+- Each rail's target is read from that rail's own "target" field in the
+  snapshot, not assumed constant month to month - a lower target some month
+  is a deliberate goal, never a shortfall to flag.
+- If resting_hr_elevation.elevated is true, state it here (current vs.
+  baseline, consecutive_days) - this is the overreaching signal and must not
+  go unmentioned while it's active.
+
+### WHAT YOU DID
+- Yesterday's session(s) from yesterday.activities, or state plainly that it
+  was a rest day (yesterday.is_rest_day) - never leave this implicit.
+- Steps and active calories vs. this month's average so far, using the
+  snapshot's own pct_delta fields - never compute your own percentage.
+
+### WHAT TO DO
+- One concrete instruction for today, bolded, with its consequence stated
+  when a pace rail is at risk ("do X, or Y becomes unreachable by Z").
+- Respect readiness: if readiness.state is "red", do not prescribe hard
+  work. If readiness.state is "unknown" (Body Battery or sleep score
+  missing), say plainly that readiness data is missing rather than reasoning
+  from a state that isn't actually known, in either direction.
+
+### INSIGHT
+- One relationship from the findings array, worded as an association not a
+  cause, that is not visible from the numbers in the other three groups. If
+  nothing in findings clears that bar, omit this whole section.
+
 Hard constraints:
-- Max 5 sentences plus one bolded action for today.
+- Every count of sessions or days is a plain integer, everywhere in the
+  brief. Never print a decimal for a countable quantity.
 - Cite specific numbers from the snapshot. Never invent one.
 - You know only that a session was "strength training." You do NOT know which
   muscles were trained. Never speculate about arms, chest, or any body part
@@ -47,10 +91,6 @@ Hard constraints:
   especially for strength training, are unreliable. Use trend weight rate as
   the measure of energy balance.
 - Do not assume any weekly schedule. Racquet sessions happen when they happen.
-- Respect the readiness gate: if red, do not prescribe hard work. If readiness
-  is "unknown" (Body Battery or sleep score missing), do not recommend more
-  or less intensity in either direction - say plainly that readiness data is
-  missing rather than reasoning from a state that isn't actually known.
 - You may only reference relationships present in the findings array. Absence
   means insufficient evidence, not evidence of absence - never say "no effect."
 - Correlational findings are associations, not causes. Word them that way.
@@ -58,8 +98,8 @@ Hard constraints:
 
 WEEKLY_SYSTEM_PROMPT = DAILY_SYSTEM_PROMPT + """
 
-This is the WEEKLY REVIEW, not the daily brief - the 5-sentence limit above
-does not apply. Produce exactly these five sections, in this order:
+This is the WEEKLY REVIEW, not the daily brief - the four-bullet-group format
+above does not apply here. Produce exactly these five sections, in this order:
 1. Scorecard: each goal, target vs actual, one line each
 2. What went well
 3. What didn't, with the likely cause from the data
@@ -77,7 +117,7 @@ period_start/period_end/prior_period_start/prior_period_end (not
 
 
 def build_metrics_snapshot(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or config.local_today()
+    today = today or config.snapshot_date()
     snapshot = analytics.build_snapshot(conn, goals, today)
     snapshot["weekly_calories_by_bucket"] = analytics.weekly_calories_by_bucket(conn, today=today)
     snapshot["avg_calories_per_session"] = analytics.avg_calories_per_session(conn, today=today)
@@ -97,7 +137,7 @@ def build_weekly_review_snapshot(conn, goals: dict, today: Optional[date] = None
     with the rolling (always-two-complete-weeks) version and a review_window
     is stamped in - the weekly review must never use the calendar-week
     "this week so far" comparison the daily brief uses."""
-    today = today or config.local_today()
+    today = today or config.snapshot_date()
     snapshot = build_metrics_snapshot(conn, goals, today)
     snapshot["review_window"] = analytics.weekly_review_window(today)
     snapshot["racquet_minutes_jump"] = analytics.rolling_racquet_minutes_jump(conn, today)
@@ -163,7 +203,7 @@ def _call_claude(system_prompt: str, user_content: str, max_tokens: int) -> str:
 
 
 def generate_daily_brief(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or config.local_today()
+    today = today or config.snapshot_date()
     snapshot = build_metrics_snapshot(conn, goals, today)
     user_content = json.dumps({
         "metrics_snapshot": snapshot,
@@ -176,7 +216,7 @@ def generate_daily_brief(conn, goals: dict, today: Optional[date] = None) -> dic
 
 
 def generate_weekly_review(conn, goals: dict, today: Optional[date] = None) -> dict:
-    today = today or config.local_today()
+    today = today or config.snapshot_date()
     snapshot = build_weekly_review_snapshot(conn, goals, today)
     user_content = json.dumps({
         "metrics_snapshot": snapshot,

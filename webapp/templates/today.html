@@ -3,192 +3,249 @@
 
 {% block content %}
 
-<!-- Row A: date + readiness + sync status -->
-<div class="dashboard-header">
-  <div class="dashboard-date">{{ today_label }}</div>
-  <div class="chip">
-    <span class="dot" data-state="{{ readiness.state }}"></span>
-    <span class="state">Readiness {{ readiness.state }}</span>
-    {% if readiness.state == 'unknown' %}
-    <span class="why">{{ readiness.unknown_reason }}</span>
-    {% else %}
-    <span class="why">Body Battery {{ readiness.body_battery_wake if readiness.body_battery_wake is not none else '—' }} · Sleep score {{ readiness.sleep_score if readiness.sleep_score is not none else '—' }}</span>
-    {% endif %}
-  </div>
+<div class="header">
+  <div class="date">{{ today_label }}</div>
+  <div class="through">{{ through_label }}</div>
   {% if last_synced_label %}
-  <div class="sync-status">{{ last_synced_label }}</div>
+  <div class="sync">{{ last_synced_label }}</div>
   {% endif %}
 </div>
 
-<div class="dashboard-grid">
+<div class="grid">
 
-  <!-- Row B: coach brief + pace rails -->
-  <div class="card g-brief" style="min-height: 210px; display: flex; flex-direction: column;">
-    <div class="section-label">Coach · daily brief</div>
+  <!-- BRIEF -->
+  <div class="card brief c5">
+    <div class="eyebrow" style="margin-bottom:16px">Coach · daily brief</div>
     {% if brief_card.status == 'ok' %}
-    <div class="brief-text">{{ brief_card.prose_html | safe }}</div>
-    {% if brief_card.action %}
-    <div class="brief-action">{{ brief_card.action }}</div>
-    {% endif %}
-    <div class="brief-timestamp">generated {{ brief_card.date }}</div>
-    {% elif brief_card.status == 'incomplete' %}
-    <p class="compare" style="margin: 0 0 8px;">Brief withheld - data incomplete:</p>
-    <ul class="compare" style="margin: 0; padding-left: 18px;">
-      {% for f in brief_card.failures %}
-      <li>{{ f }}</li>
+      {% for group in brief_card.groups %}
+      <div class="bgroup">
+        <div class="blabel">{{ group.label }}</div>
+        <ul>
+          {% for bullet in group.bullets %}
+          <li>{{ bullet | safe }}</li>
+          {% endfor %}
+        </ul>
+      </div>
       {% endfor %}
-    </ul>
+      {% if brief_card.insight %}
+      <div class="insight">
+        <div class="blabel">{{ brief_card.insight.label }}</div>
+        {% for bullet in brief_card.insight.bullets %}
+        <p>{{ bullet | safe }}</p>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <div class="stamp">generated {{ brief_card.date }}</div>
+    {% elif brief_card.status == 'incomplete' %}
+      <p style="color:var(--muted);margin-bottom:8px;">Brief withheld — data incomplete:</p>
+      <ul style="color:var(--muted);padding-left:18px;">
+        {% for f in brief_card.failures %}
+        <li>{{ f }}</li>
+        {% endfor %}
+      </ul>
     {% else %}
-    <p class="compare" style="margin: 0;">No brief generated yet today.</p>
+      <p style="color:var(--muted);">No brief generated yet today.</p>
     {% endif %}
   </div>
 
-  <div class="card g-rails">
-    <div class="section-label">Pace</div>
+  <!-- RAILS -->
+  <div class="card c7">
+    <div class="eyebrow" style="margin-bottom:22px">{{ rails_eyebrow }}</div>
     <div class="rails">
       {% for rail in rails %}
       <div>
         <div class="rail-head">
-          <span class="section-label" style="margin-bottom: 0;">{{ rail.label }}</span>
-          <span class="gap-note {{ rail.gap_class }}">{{ rail.gap_label }}</span>
+          <span class="eyebrow">{{ rail.label }}</span>
+          <span class="remain {{ rail.css_state }}">{{ rail.remain_label }}</span>
         </div>
-        <div class="pace-rail" data-on-pace="{{ 'true' if rail.on_pace else 'false' }}">
-          <div class="pace-rail-track">
-            <div class="pace-rail-fill" style="--fill-pct: {{ rail.fill_pct }}%"></div>
-            {% if rail.gapzone_width > 0 %}
-            <div class="pace-rail-gapzone" style="left: {{ rail.gapzone_left }}%; width: {{ rail.gapzone_width }}%"></div>
-            {% endif %}
-            <div class="pace-rail-tick" style="--tick-pct: {{ rail.tick_pct }}%">
-              <span class="pace-rail-tick-label">expected</span>
-            </div>
+        <div class="track">
+          <div class="fill {{ rail.css_state }}" style="width:{{ rail.fill_pct }}%"></div>
+          {% if rail.gapzone_width > 0 %}
+          <div class="gapzone" style="left:{{ rail.gapzone_left }}%;width:{{ rail.gapzone_width }}%"></div>
+          {% endif %}
+          <div class="tick" style="left:{{ rail.tick_pct }}%"><span>expected</span></div>
+        </div>
+        <div class="rail-foot">
+          <div class="rail-val">
+            <b class="{{ 'sm' if rail.big else '' }}">{{ "{:,}".format(rail.actual) }}</b>
+            <em>/ {{ "{:,}".format(rail.target) }}{{ rail.unit }}</em>
           </div>
-          <div class="pace-rail-numbers">
-            {% if rail.not_synced %}
-            <b class="idle">not yet synced</b><em>/ {{ "{:,}".format(rail.target) if rail.target is number else rail.target }}{{ rail.unit }}</em>
-            {% else %}
-            <b>{{ "{:,}".format(rail.actual) if rail.actual is number else rail.actual }}</b>
-            <em>/ {{ "{:,}".format(rail.target) if rail.target is number else rail.target }}{{ rail.unit }}</em>
-            {% endif %}
-          </div>
+          {% if rail.rate_label %}
+          <span class="rate">{{ rail.rate_label }}</span>
+          {% endif %}
         </div>
       </div>
       {% endfor %}
     </div>
   </div>
 
-  <!-- Row C: steps 30-day + yesterday -->
-  <div class="card g-steps">
+  <!-- DAILY STEPS -->
+  <div class="card c8">
     {% if steps_module.state == 'insufficient' %}
-    <div class="insufficient-frame"><div class="txt"><h3>Steps — not enough data</h3><p>{{ steps_module.requirement }}.</p></div></div>
+    <div class="empty"><div class="txt"><h3>Steps — not enough data</h3><p>{{ steps_module.requirement }}.</p></div></div>
     {% else %}
     <div class="chart-title">{{ steps_module.finding }}</div>
-    <div class="chart-subtitle">{{ steps_module.subtitle }}</div>
-    <div class="chart-frame-steps">{{ steps_module.svg | safe }}</div>
+    <div class="chart-sub">{{ steps_module.subtitle }}</div>
+    <div class="stats">
+      <div class="stat"><div class="k">Month total</div><div class="v ok">{{ "{:,}".format(steps_module.month_total) }}</div></div>
+      <div class="stat"><div class="k">Daily average</div><div class="v">{{ "{:,}".format(steps_module.daily_avg) }}</div></div>
+      <div class="stat"><div class="k">Days at goal</div><div class="v">{{ steps_module.days_at_goal }} / {{ steps_module.days_in_period }}</div></div>
+      <div class="stat"><div class="k">Best day</div><div class="v">{{ "{:,}".format(steps_module.best_day) }}</div></div>
+    </div>
+    <div class="chart-frame">{{ steps_module.svg | safe }}</div>
     {% endif %}
   </div>
 
-  <div class="card g-yesterday">
-    <div class="section-label">Yesterday · {{ yesterday.date }}</div>
-    <div class="yst">
-      <div class="yrow"><span class="v">{{ yesterday.steps if yesterday.steps is not none else '—' }} steps</span><span class="a">avg 7d {{ yesterday.steps_avg_7d if yesterday.steps_avg_7d is not none else '—' }}</span></div>
-      {% if yesterday.activity_labels %}
-      <div class="yrow"><span class="v">{{ yesterday.activity_labels | join(', ') }}</span></div>
+  <!-- YESTERDAY -->
+  <div class="card yst c4">
+    <div class="chart-title">Yesterday</div>
+    <div class="chart-sub">{{ yesterday.date_label }} · vs your month average</div>
+    <div class="row">
+      <span class="lbl">Steps</span>
+      <span>
+        <span class="v">{{ "{:,}".format(yesterday.steps) if yesterday.steps is not none else '—' }}</span>
+        {% if yesterday.steps_chip %}<span class="d {{ yesterday.steps_chip.cls }}">{{ yesterday.steps_chip.label }}</span>{% endif %}
+      </span>
+    </div>
+    <div class="row">
+      <span class="lbl">Activity</span>
+      {% if yesterday.is_rest_day %}
+      <span class="tag">Rest day</span>
       {% else %}
-      <div class="none">No activity logged</div>
+      <span>{{ yesterday.activity_labels | join(', ') }}</span>
       {% endif %}
-      <div class="yrow"><span class="v">{{ yesterday.active_calories if yesterday.active_calories is not none else '—' }} cal active</span><span class="a">avg 7d {{ yesterday.active_calories_avg_7d if yesterday.active_calories_avg_7d is not none else '—' }}</span></div>
-      <div class="yrow"><span class="v">{{ yesterday.sleep_hours if yesterday.sleep_hours is not none else '—' }}h sleep</span><span class="a">avg 7d {{ yesterday.sleep_hours_avg_7d if yesterday.sleep_hours_avg_7d is not none else '—' }}</span></div>
-      <div class="yrow"><span class="v">{{ yesterday.resting_hr if yesterday.resting_hr is not none else '—' }} bpm resting</span><span class="a">baseline {{ yesterday.resting_hr_baseline_30d if yesterday.resting_hr_baseline_30d is not none else '—' }}</span></div>
+    </div>
+    <div class="row">
+      <span class="lbl">Active cal</span>
+      <span>
+        <span class="v">{{ yesterday.active_calories if yesterday.active_calories is not none else '—' }}</span>
+        {% if yesterday.active_calories_chip %}<span class="d {{ yesterday.active_calories_chip.cls }}">{{ yesterday.active_calories_chip.label }}</span>{% endif %}
+      </span>
+    </div>
+    <div class="row">
+      <span class="lbl">Sleep</span>
+      <span>
+        <span class="v">{{ yesterday.sleep_hours ~ 'h' if yesterday.sleep_hours is not none else '—' }}</span>
+        {% if yesterday.sleep_chip %}<span class="d {{ yesterday.sleep_chip.cls }}">{{ yesterday.sleep_chip.label }}</span>{% endif %}
+      </span>
+    </div>
+    <div class="row">
+      <span class="lbl">Resting HR</span>
+      <span>
+        <span class="v">{{ yesterday.resting_hr if yesterday.resting_hr is not none else '—' }}</span>
+        {% if yesterday.resting_hr_chip %}<span class="d {{ yesterday.resting_hr_chip.cls }}">{{ yesterday.resting_hr_chip.label }}</span>{% endif %}
+      </span>
     </div>
   </div>
 
-  <!-- Row D: training calendar + sessions by month -->
-  <div class="card g-calendar">
-    <div class="chart-title">{{ calendar_module.finding }}</div>
-    <div class="chart-subtitle">{{ calendar_module.subtitle }}</div>
-    <div class="chart-scroll">{{ calendar_module.svg | safe }}</div>
-    <div class="chart-legend">
-      <span><i style="background: {{ '#6C8EFF' }}"></i>Strength</span>
-      <span><i style="background: #E0A458"></i>Racquet</span>
-      <span><i style="background: #8B7BB8"></i>Cardio</span>
-      <span><i style="background: var(--line)"></i>Rest</span>
+  <!-- MONTHLY STEPS -->
+  <div class="card c6">
+    <div class="chart-title">{{ monthly_steps_module.finding }}</div>
+    <div class="chart-sub">{{ monthly_steps_module.subtitle }}</div>
+    <div class="chart-frame">{{ monthly_steps_module.svg | safe }}</div>
+  </div>
+
+  <!-- SESSIONS BY MONTH -->
+  <div class="card c6">
+    <div class="chart-title">{{ sessions_module.finding }}</div>
+    <div class="chart-sub">{{ sessions_module.subtitle }}</div>
+    <div class="chart-frame">{{ sessions_module.svg | safe }}</div>
+    <div class="legend">
+      <span><i style="background:var(--b-strength)"></i>Strength</span>
+      <span><i style="background:var(--b-racquet)"></i>Racquet</span>
+      <span><i style="background:var(--b-cardio)"></i>Cardio</span>
     </div>
   </div>
 
-  <div class="card g-monthtbl">
-    <div class="chart-title">Sessions by month</div>
-    <div class="chart-subtitle">{{ month_rows[0].month_label }} – {{ month_rows[-1].month_label }}</div>
-    <table class="month-table">
-      <thead><tr><th>Month</th><th>Str</th><th>Racq</th><th>Cardio</th><th>Total</th></tr></thead>
-      <tbody>
-        {% for m in month_rows %}
-        <tr><td>{{ m.month_label }}</td><td>{{ m.strength }}</td><td>{{ m.racquet }}</td><td>{{ m.cardio }}</td><td>{{ m.total }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-
-  <!-- Row E: weekly calories + recovery -->
-  <div class="card g-calories">
+  <!-- DAILY CALORIES -->
+  <div class="card c8">
     {% if calories_module.state == 'insufficient' %}
-    <div class="insufficient-frame"><div class="txt"><h3>Weekly calories — not enough data</h3><p>{{ calories_module.requirement }}.</p></div></div>
+    <div class="empty"><div class="txt"><h3>Active calories — not enough data</h3><p>{{ calories_module.requirement }}.</p></div></div>
     {% else %}
-    <div class="chart-title">{{ calories_module.finding }}</div>
-    <div class="chart-subtitle">{{ calories_module.subtitle }}</div>
-    <div class="chart-scroll">{{ calories_module.svg | safe }}</div>
-    <div class="chart-legend">
-      <span><i style="background: #6C8EFF"></i>Strength</span>
-      <span><i style="background: #E0A458"></i>Racquet</span>
-      <span><i style="background: #8B7BB8"></i>Cardio</span>
-      <span><i style="background: var(--dim)"></i>Other</span>
+    <div class="chart-title">Active calories follow your sessions, not your steps</div>
+    <div class="chart-sub">{{ calories_module.subtitle }}</div>
+    <div class="stats">
+      <div class="stat"><div class="k">Month total</div><div class="v">{{ "{:,}".format(calories_module.month_total) }}</div></div>
+      <div class="stat"><div class="k">Daily average</div><div class="v">{{ calories_module.daily_avg }}</div></div>
+      <div class="stat"><div class="k">Best day</div><div class="v">{{ calories_module.best_day }}</div></div>
+      <div class="stat"><div class="k">Rest-day average</div><div class="v">{{ calories_module.rest_day_avg if calories_module.rest_day_avg is not none else '—' }}</div></div>
+    </div>
+    <div class="chart-frame">{{ calories_module.svg | safe }}</div>
+    <div class="legend">
+      <span><i style="background:var(--b-strength)"></i>Strength day <b>{{ calories_module.counts.strength }}</b></span>
+      <span><i style="background:var(--b-racquet)"></i>Racquet day <b>{{ calories_module.counts.racquet }}</b></span>
+      <span><i style="background:var(--b-cardio)"></i>Cardio day <b>{{ calories_module.counts.cardio }}</b></span>
+      <span><i style="background:var(--b-unlogged)"></i>Rest day <b>{{ calories_module.counts.rest }}</b></span>
     </div>
     {% endif %}
   </div>
 
-  <div class="card g-recovery">
-    {% if recovery_module.state == 'insufficient' %}
-    <div class="insufficient-frame"><div class="txt"><h3>Recovery — not enough data</h3><p>{{ recovery_module.requirement }}.</p></div></div>
-    {% else %}
+  <!-- RECOVERY -->
+  <div class="card c4">
     <div class="chart-title">Recovery</div>
-    <div class="chart-subtitle">{{ recovery_module.subtitle }}</div>
-    <div class="sparkline-frame">{{ recovery_module.hr_svg | safe }}</div>
-    <div class="sparkline-frame" style="margin-top: 14px;">{{ recovery_module.sleep_svg | safe }}</div>
-    {% endif %}
+    <div class="chart-sub">Resting HR, sleep, and training load</div>
+    <ul class="rec">
+      {% for b in recovery_module.bullets %}
+      <li class="{{ b.cls }}">{{ b.text | safe }}</li>
+      {% endfor %}
+    </ul>
+    <div class="verdict">{{ recovery_module.verdict }}</div>
   </div>
 
-  <!-- Row F: weight -->
-  <div class="card g-full">
+  <!-- MONTHLY CALORIES -->
+  <div class="card c6">
+    <div class="chart-title">{{ monthly_calories_module.finding }}</div>
+    <div class="chart-sub">{{ monthly_calories_module.subtitle }}</div>
+    <div class="chart-frame">{{ monthly_calories_module.svg | safe }}</div>
+    <div class="legend">
+      <span><i style="background:var(--b-racquet)"></i>Racquet</span>
+      <span><i style="background:var(--b-strength)"></i>Strength</span>
+      <span><i style="background:var(--b-cardio)"></i>Cardio</span>
+      <span><i style="background:var(--b-unlogged)"></i>Unlogged movement</span>
+    </div>
+  </div>
+
+  <!-- MONTH CALENDAR -->
+  <div class="card c6">
+    <div class="chart-title">{{ calendar_module.finding }}</div>
+    <div class="chart-sub">{{ calendar_module.subtitle }}</div>
+    <div class="chart-frame">{{ calendar_module.svg | safe }}</div>
+    <div class="legend">
+      <span><i style="background:var(--b-strength)"></i>Strength <b>{{ calendar_module.counts.strength }}</b></span>
+      <span><i style="background:var(--b-racquet)"></i>Racquet <b>{{ calendar_module.counts.racquet }}</b></span>
+      <span><i style="background:var(--b-cardio)"></i>Cardio <b>{{ calendar_module.counts.cardio }}</b></span>
+      <span><i style="background:var(--line)"></i>Rest <b>{{ calendar_module.counts.rest }}</b></span>
+    </div>
+  </div>
+
+  <!-- WEIGHT -->
+  <div class="card c12">
     {% if weight_module.state == 'insufficient' %}
-    <div class="insufficient-frame">
+    <div class="empty">
       <div class="txt">
         <h3>Weight — not enough data</h3>
         <p>
           {{ weight_module.n_readings }} reading{{ 's' if weight_module.n_readings != 1 else '' }}
           {% if weight_module.since %}since {{ weight_module.since }}{% endif %}.
-          This chart needs {{ weight_module.min_readings }} readings across
-          {{ (weight_module.min_span_days / 7) | round(0, 'floor') | int }} weeks before it can show a trend
-          {% if weight_module.checkpoint %}, and your {{ weight_module.checkpoint.date }} checkpoint can't be assessed until then{% endif %}.
+          A trend needs {{ weight_module.min_readings }} readings across
+          {{ (weight_module.min_span_days / 7) | round(0, 'floor') | int }} weeks.
+          {% if weight_module.checkpoint %}Until then your {{ weight_module.checkpoint.date }} checkpoint of
+          {{ weight_module.checkpoint.target }} lb can't be assessed, and no rate will be shown.{% endif %}
         </p>
-        <form class="log-weight-form" action="/log-weight" method="post">
+        <form class="wrow" action="/log-weight" method="post">
           <input type="number" step="0.1" name="weight_lb" placeholder="lb" required>
-          <button type="submit">Log weight</button>
+          <button type="submit" class="btn">Log weight</button>
         </form>
       </div>
-      <div class="ghost">{{ weight_module.ghost_svg | safe }}</div>
+      <div style="flex:1 1 380px">{{ weight_module.points_svg | safe }}</div>
     </div>
     {% else %}
-    <div class="row" style="align-items: baseline;">
-      <span class="figure-large">{{ weight_module.trend_weight_lb }}</span>
-      <span class="compare">
-        {% if weight_module.rate_lb_per_week is not none %}
-        {{ weight_module.rate_lb_per_week }} lb/wk
-        {% endif %}
-      </span>
-    </div>
-    <div class="chart-frame-weight">{{ weight_module.svg | safe }}</div>
-    <form class="log-weight-form" action="/log-weight" method="post">
+    <div class="chart-title">{{ weight_module.trend_weight_lb }} lb{% if weight_module.rate_lb_per_week is not none %} · {{ weight_module.rate_lb_per_week }} lb/wk{% endif %}</div>
+    <div class="chart-sub">Trend weight (7-day EWMA)</div>
+    <div class="chart-frame" style="height:240px">{{ weight_module.svg | safe }}</div>
+    <form class="wrow" action="/log-weight" method="post">
       <input type="number" step="0.1" name="weight_lb" placeholder="lb" required>
-      <button type="submit">Log weight</button>
+      <button type="submit" class="btn">Log weight</button>
     </form>
     {% endif %}
   </div>

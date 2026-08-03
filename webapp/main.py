@@ -1,5 +1,6 @@
 """FastAPI app serving the Today screen (Phase 2 - static, no LLM yet)."""
 import base64
+import html
 import json
 import re
 import secrets
@@ -58,45 +59,92 @@ app.mount("/static", StaticFiles(directory="webapp/static"), name="static")
 templates = Jinja2Templates(directory="webapp/templates")
 
 
-def _rail(label: str, pace: dict, unit: str = "", not_synced: bool = False) -> dict:
+def _rail(label: str, pace: dict, unit: str = "", rate_style: str = "steps") -> dict:
+    """Builds one pace rail's display dict from analytics.py's monthly pace
+    dict (state: cleared/behind/dead, integers only - see _monthly_pace's
+    own docstring). `rate_style` picks how the footer rate reads: steps is
+    always a daily rate; racquet reads naturally as a weekly rate; strength
+    has no natural rate unit besides "needs N/day" while behind."""
     target = pace["target"] or 0
     actual = pace["actual"]
     expected = pace["expected_by_now"]
-    delta = pace["delta"]
-    # A missing actual (not yet synced) is never rendered as a real zero -
-    # the fill bar shows empty and the template shows "not yet synced"
-    # instead of a fabricated number.
-    not_synced = not_synced or actual is None
-    fill_pct = min((actual / target) * 100, 100) if target and actual is not None else 0
-    tick_pct = min((expected / target) * 100, 100) if target and expected is not None else 0
+    state = pace["state"]
 
-    gap_label, gap_class = None, "idle"
-    if not_synced:
-        gap_label = "awaiting sync"
-    elif delta is not None:
-        if delta < 0:
-            gap_label, gap_class = f"{abs(delta):g} behind", "behind"
-        elif delta > 0:
-            gap_label, gap_class = f"{delta:g} ahead", "ahead"
-        else:
-            gap_label, gap_class = "on pace", "idle"
+    fill_pct = min((actual / target) * 100, 100) if target else 0
+    tick_pct = min((expected / target) * 100, 100) if target and expected is not None else 0
+    css_state = "ahead" if state == "cleared" else state
+
+    if state == "cleared":
+        over = pace["over"]
+        remain_label = f"cleared · +{over:,} over" if over > 0 else "cleared"
+    else:
+        days_remaining = pace["days_remaining"]
+        day_word = "day" if days_remaining == 1 else "days"
+        remain_label = f"{pace['remaining']:,} left · {days_remaining} {day_word}"
+        if state == "dead":
+            remain_label += " · not reachable"
+
+    rate_label = None
+    if rate_style == "steps":
+        rate_label = f"{pace['avg_rate']:,.0f}/day avg · needed {pace['original_required_rate']:,.0f}"
+    elif state == "dead":
+        rate_label = f"became unreachable {charts._human_date(pace['became_unreachable_date'])}"
+    elif rate_style == "racquet":
+        rate_label = f"{pace['avg_rate_per_week']}/week" if state == "cleared" else f"needs {round(pace['required_rate'] * 7, 1)}/week"
+    elif rate_style == "strength" and state == "behind":
+        rate_label = f"needs {pace['required_rate']}/day"
 
     return {
         "label": label,
         "actual": actual,
-        "target": pace["target"],
+        "target": target,
         "unit": unit,
         "fill_pct": round(fill_pct, 1),
         "tick_pct": round(tick_pct, 1),
-        "on_pace": pace["on_pace"],
-        "not_synced": not_synced,
-        "gap_label": gap_label,
-        "gap_class": gap_class,
-        # the gap zone (the shaded region between the fill and the expected
-        # tick) only makes sense when behind - "ahead" already reads clearly
-        # from the fill overshooting the tick.
+        "css_state": css_state,
+        "remain_label": remain_label,
+        "rate_label": rate_label,
+        "big": rate_style == "steps",
+        # the gap zone (shaded region between fill and the expected tick)
+        # only makes sense once behind - "cleared" already reads clearly
+        # from the fill covering (or overshooting) the tick.
         "gapzone_left": min(fill_pct, tick_pct),
-        "gapzone_width": abs(tick_pct - fill_pct) if gap_class == "behind" else 0,
+        "gapzone_width": abs(tick_pct - fill_pct) if state in ("behind", "dead") else 0,
+    }
+
+
+def _yesterday_display(y: dict) -> dict:
+    """Presentation-only formatting (sign, %, up/dn class) of already-
+    computed yesterday_summary() fields - no metric is computed here, just
+    strings built from numbers analytics.py already produced."""
+    def pct_chip(value, pct_delta):
+        if value is None or pct_delta is None:
+            return None
+        sign = "+" if pct_delta >= 0 else "−"
+        return {"label": f"{sign}{abs(round(pct_delta))}%", "cls": "up" if pct_delta >= 0 else "dn"}
+
+    def abs_chip(delta, unit=""):
+        if delta is None:
+            return None
+        sign = "+" if delta >= 0 else ""
+        return {"label": f"{sign}{delta}{unit}", "cls": "up" if delta >= 0 else "dn"}
+
+    activity_labels = [
+        f"{(a['type'] or 'activity').replace('_', ' ').title()} {round(a['duration_min'])}min"
+        for a in y["activities"]
+    ]
+    return {
+        "date_label": charts._human_date(y["date"]),
+        "steps": y["steps"],
+        "steps_chip": pct_chip(y["steps"], y["steps_pct_delta"]),
+        "is_rest_day": y["is_rest_day"],
+        "activity_labels": activity_labels,
+        "active_calories": y["active_calories"],
+        "active_calories_chip": pct_chip(y["active_calories"], y["active_calories_pct_delta"]),
+        "sleep_hours": y["sleep_hours"],
+        "sleep_chip": abs_chip(y["sleep_hours_delta"], "h"),
+        "resting_hr": y["resting_hr"],
+        "resting_hr_chip": abs_chip(y["resting_hr_delta"]),
     }
 
 
@@ -110,18 +158,35 @@ def _relative_time(dt: datetime, now: datetime) -> str:
     return f"{round(hours / 24)}d ago"
 
 
-def _split_brief_action(text: str) -> tuple[str, str]:
-    """The daily brief ends with one bolded action sentence, per the coach
-    prompt's own hard constraint - split it out so the card can render it
-    below a hairline instead of buried in the prose."""
-    matches = list(re.finditer(r"\*\*(.+?)\*\*", text))
-    if not matches:
-        return text.strip(), None
-    last = matches[-1]
-    return text[:last.start()].strip(), last.group(1).strip()
+def _inline_md(text: str) -> str:
+    return re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", html.escape(text))
 
 
-def _brief_card(conn, today_date: date) -> dict:
+def _parse_brief_sections(text: str) -> list[dict]:
+    """Splits the coach brief's `### HEADER` / `- bullet` markdown (per
+    coach.py's DAILY_SYSTEM_PROMPT) into an ordered list of labeled bullet
+    groups. Pure text structuring, not a metric computation - the LLM
+    already decided what to say and in what order; this only navigates the
+    markdown it agreed to produce."""
+    sections = []
+    current = None
+    for line in text.splitlines():
+        header = re.match(r"^#{1,3}\s+(.+?)\s*$", line)
+        if header:
+            current = {"label": header.group(1).strip(), "bullets": []}
+            sections.append(current)
+            continue
+        bullet = re.match(r"^[-*]\s+(.+?)\s*$", line)
+        if bullet and current is not None:
+            current["bullets"].append(_inline_md(bullet.group(1)))
+        elif line.strip() and current is not None and not current["bullets"]:
+            # A section with prose instead of bullets (INSIGHT is usually a
+            # paragraph, not a bullet list) - keep it as a single "bullet".
+            current["bullets"].append(_inline_md(line.strip()))
+    return sections
+
+
+def _brief_card(conn, snapshot_date_val: date) -> dict:
     """The coach brief card must never render nothing - if today's brief is
     missing or fails the pre-send validation gate, the card says exactly
     which check failed instead of showing a blank space."""
@@ -130,15 +195,17 @@ def _brief_card(conn, today_date: date) -> dict:
         return {"status": "missing"}
 
     brief = rows[0]
-    failures = coach_email.validate_snapshot(conn, brief, today_date.isoformat())
+    failures = coach_email.validate_snapshot(conn, brief, snapshot_date_val.isoformat())
     if failures:
         return {"status": "incomplete", "failures": failures}
 
-    prose, action = _split_brief_action(brief["body_markdown"])
+    sections = _parse_brief_sections(brief["body_markdown"])
+    insight = next((s for s in sections if s["label"].upper() == "INSIGHT"), None)
+    groups = [s for s in sections if s["label"].upper() != "INSIGHT"]
     return {
         "status": "ok",
-        "prose_html": coach_email._markdown_to_html(prose),
-        "action": action,
+        "groups": groups,
+        "insight": insight,
         "date": brief["date"],
     }
 
@@ -147,27 +214,26 @@ def _brief_card(conn, today_date: date) -> dict:
 def today(request: Request):
     conn = db.get_connection()
     try:
-        today_date = config.local_today()
+        real_today = config.local_today()
+        snap_date = config.snapshot_date()
 
         # Single source of truth: everything below reads from this one dict.
         # No separate aggregate query - see analytics.build_snapshot's
-        # docstring for why.
-        snapshot = analytics.build_snapshot(conn, config.GOALS, today_date)
+        # docstring for why. Every figure covers data through snap_date
+        # (rule 1: midnight cutoff) - real_today is used only for the page
+        # header's own calendar date, never for a metric.
+        snapshot = analytics.build_snapshot(conn, config.GOALS, snap_date)
 
-        yesterday = snapshot["yesterday"]
-        yesterday["activity_labels"] = [
-            f"{(a['type'] or 'activity').replace('_', ' ').title()} {round(a['duration_min'])}min"
-            for a in yesterday["activities"]
-        ]
-
-        steps_stale = snapshot["sync_status"]["sources"]["daily_metrics"]["stale"]
         rails = [
-            _rail("Steps · Today", snapshot["steps_pace"], not_synced=steps_stale),
-            _rail("Strength · This Month", snapshot["strength_pace"], unit=" sessions"),
-            _rail("Racquet · This Week", snapshot["racquet_pace"], unit=" sessions"),
+            _rail("Steps · this month", snapshot["steps_pace"], rate_style="steps"),
+            _rail("Strength · this month", snapshot["strength_pace"], unit=" sessions", rate_style="strength"),
+            _rail("Racquet · this month", snapshot["racquet_pace"], unit=" sessions", rate_style="racquet"),
         ]
+        days_remaining = snapshot["steps_pace"]["days_remaining"]
+        day_word = "day" if days_remaining == 1 else "days"
+        rails_eyebrow = f"Pace · {snap_date.strftime('%B')} · {days_remaining} {day_word} remaining"
 
-        brief_card = _brief_card(conn, today_date)
+        brief_card = _brief_card(conn, snap_date)
 
         last_sync_at = snapshot["sync_status"]["sources"]["daily_metrics"]["last_sync_at"]
         last_synced_label = None
@@ -178,77 +244,116 @@ def today(request: Request):
             time_str = local_time.strftime("%H:%M")
             last_synced_label = f"last sync {time_str} · {_relative_time(local_time, now_local)}"
 
-        # ---- Steps, 30 days ----
-        steps_data = analytics.steps_30_day(conn, config.GOALS, today_date)
+        # ---- Steps, current month ----
+        steps_data = analytics.steps_current_month(conn, config.GOALS, snap_date)
         steps_module = {"state": steps_data["state"]}
         if steps_data["state"] == "insufficient":
-            steps_module["requirement"] = f"needs {steps_data['min_required']} days, have {steps_data['n_available']}"
+            steps_module["requirement"] = "no synced steps yet this month"
         else:
+            direction = "above" if steps_data["pct_vs_goal"] >= 0 else "below"
             steps_module.update({
-                "svg": charts.steps_30day_svg(steps_data),
-                "finding": f"You're averaging {steps_data['avg']:,} steps — "
-                           f"{abs(steps_data['pct_vs_goal'])}% {'above' if steps_data['pct_vs_goal'] >= 0 else 'below'} goal",
-                "subtitle": f"Daily steps · {charts._human_date(steps_data['range_start'])} – {charts._human_date(steps_data['range_end'])} · 7-day average overlaid"
-                            + (f" · {steps_data['n_available']} of 30 days available" if steps_data["state"] == "partial" else ""),
+                "svg": charts.steps_month_bars_svg(steps_data),
+                "finding": f"{snap_date.strftime('%B')} averaged {steps_data['daily_avg']:,} steps a day — "
+                           f"{abs(steps_data['pct_vs_goal'])}% {direction} your {steps_data['goal']:,} goal",
+                "subtitle": f"Daily steps · {charts._human_date(steps_data['range_start'])} – "
+                            f"{charts._human_date(steps_data['range_end'])} · hover any bar for its exact count",
+                "month_total": steps_data["month_total"],
+                "daily_avg": steps_data["daily_avg"],
+                "days_at_goal": steps_data["days_at_goal"],
+                "days_in_period": steps_data["days_in_period"],
+                "best_day": steps_data["best_day"],
             })
 
-        # ---- Training calendar ----
-        cal = analytics.training_calendar_weeks(conn, today_date)
-        n_training_days = sum(1 for d in cal["days"] if d["buckets"])
-        n_weeks_shown = -(-len(cal["days"]) // 7)
-        calendar_module = {
-            "svg": charts.training_calendar_weeks_svg(cal),
-            "finding": f"{n_training_days} training days across {n_weeks_shown} weeks",
-            "subtitle": f"{charts._human_date(cal['start'])} – {charts._human_date(cal['end'])} · one cell per day",
+        # ---- Yesterday ----
+        yesterday = _yesterday_display(snapshot["yesterday"])
+
+        # ---- Monthly steps (6 months) ----
+        monthly_steps = analytics.monthly_steps_bars(conn, config.GOALS, snap_date)
+        # The current month is still in progress within this window (it
+        # only ever runs through snap_date), so comparing its partial total
+        # against the full-month target would always read as "missed" -
+        # the headline finding below only judges completed months; the
+        # current month still renders in the chart itself.
+        completed_months = monthly_steps[:-1]
+        n_cleared = sum(1 for r in completed_months if r["cleared"])
+        misses = [r for r in completed_months if not r["cleared"]]
+        if not completed_months:
+            monthly_steps_finding = "Steps by month"
+        elif misses:
+            worst = min(misses, key=lambda r: r["steps"] - r["target"])
+            monthly_steps_finding = (
+                f"{n_cleared} of {len(completed_months)} completed months cleared target — "
+                f"{worst['month_label']} missed by {abs(worst['steps'] - worst['target']):,}"
+            )
+        else:
+            monthly_steps_finding = f"All {len(completed_months)} completed months cleared target"
+        monthly_steps_module = {
+            "svg": charts.monthly_steps_bars_svg(monthly_steps),
+            "finding": monthly_steps_finding,
+            "subtitle": "Total steps by month · dashed tick = that month's own target",
         }
 
         # ---- Sessions by month ----
-        month_rows = analytics.sessions_by_month(conn, today=today_date)
+        month_rows = analytics.sessions_by_month(conn, today=snap_date)
+        sessions_module = {
+            "svg": charts.sessions_month_stacked_svg(month_rows),
+            "finding": "Strength sessions only start appearing in June"
+                       if month_rows[0]["strength"] == 0 and month_rows[-1]["strength"] > 0
+                       else "Sessions by month and type",
+            "subtitle": f"{month_rows[0]['month_label']} – {month_rows[-1]['month_label']}",
+        }
 
-        # ---- Weekly calories ----
-        wc = analytics.weekly_calories_with_total(conn, today=today_date)
-        calories_module = {"state": wc["state"]}
-        if wc["state"] == "insufficient":
-            calories_module["requirement"] = f"needs 3 complete weeks, have {wc['complete_weeks']}"
+        # ---- Daily calories, current month ----
+        dcal = analytics.daily_calories_current_month(conn, snap_date)
+        calories_module = {"state": dcal["state"]}
+        if dcal["state"] == "insufficient":
+            calories_module["requirement"] = "no synced active-calorie data yet this month"
         else:
-            dominant = analytics.weekly_calories_dominant_bucket(wc)
-            finding = (
-                f"{dominant['bucket'].capitalize()} carries {dominant['pct']}% of your logged active calories"
-                if dominant else "Weekly active calories by type"
-            )
             calories_module.update({
-                "svg": charts.stacked_bar_svg(wc, total_line=wc["total_active_calories"], stretch=True),
-                "finding": finding,
-                "subtitle": "Weekly active calories by type · last 12 weeks"
-                            + (f" · {wc['complete_weeks']} of 12 weeks available" if wc["state"] == "partial" else ""),
+                "svg": charts.daily_calories_month_svg(dcal),
+                "subtitle": f"Daily active calories · {charts._human_date(dcal['range_start'])} – "
+                            f"{charts._human_date(dcal['range_end'])} · colored by what you logged that day",
+                "month_total": dcal["month_total"],
+                "daily_avg": dcal["daily_avg"],
+                "best_day": dcal["best_day"],
+                "rest_day_avg": dcal["rest_day_avg"],
+                "counts": dcal["counts"],
             })
 
-        # ---- Recovery sparklines ----
-        rs = analytics.recovery_sparklines(conn, today_date)
-        recovery_module = {"state": rs["state"]}
-        if rs["state"] == "insufficient":
-            recovery_module["requirement"] = f"needs {rs['min_required']} days, have {rs['n_available']}"
-        else:
-            hr, sleep = rs["resting_hr"], rs["sleep_hours"]
-            hr_band_low = (hr["mean_30d"] - hr["sd_30d"]) if hr["mean_30d"] is not None else None
-            hr_band_high = (hr["mean_30d"] + hr["sd_30d"]) if hr["mean_30d"] is not None else None
-            recovery_module.update({
-                "subtitle": f"Resting HR and sleep · {charts._human_date(rs['range_start'])} – {charts._human_date(rs['range_end'])} · shaded band = normal range",
-                "hr_svg": charts.sparkline_svg(hr["points"], band_low=hr_band_low, band_high=hr_band_high,
-                                                label="Resting HR", unit="bpm", current=hr["current"]),
-                "sleep_svg": charts.sparkline_svg(sleep["points"], band_low=sleep["band_low"], band_high=sleep["band_high"],
-                                                   label="Sleep", unit="hours", current=sleep["current"]),
-            })
+        # ---- Monthly calories by source ----
+        mcal = analytics.monthly_calories_by_source(conn, snap_date)
+        latest = mcal[-1]
+        top_key = max(("racquet", "strength", "cardio", "unlogged"), key=lambda k: latest[k])
+        top_pct = round(latest[top_key] / latest["total"] * 100) if latest["total"] else 0
+        top_names = {"racquet": "Racquet sports", "strength": "Strength", "cardio": "Cardio", "unlogged": "Unlogged movement"}
+        monthly_calories_module = {
+            "svg": charts.monthly_calories_stacked_svg(mcal),
+            "finding": f"{top_names[top_key]} {'are' if top_key != 'strength' else 'is'} {top_pct}% of your {latest['month_label']} burn",
+            "subtitle": "Monthly active calories by source · unlogged movement is everything counted outside a session",
+        }
+
+        # ---- July (current month) calendar ----
+        cal = analytics.current_month_calendar(conn, snap_date)
+        n_training = cal["counts"]["strength"] + cal["counts"]["racquet"] + cal["counts"]["cardio"]
+        calendar_module = {
+            "svg": charts.month_calendar_svg(cal),
+            "finding": f"{n_training} training days, {cal['counts']['rest']} rest days in {snap_date.strftime('%B')}",
+            "subtitle": f"One cell per day · longest streak {cal['longest_streak']} days · longest gap {cal['longest_gap']} days",
+            "counts": cal["counts"],
+        }
+
+        # ---- Recovery ----
+        recovery_module = snapshot["recovery"]
 
         # ---- Weight ----
-        wt = analytics.weight_chart_data(conn, config.GOALS, today_date)
+        wt = analytics.weight_chart_data(conn, config.GOALS, snap_date)
         weight_module = {"state": wt["state"]}
         if wt["state"] == "insufficient":
             weight_module.update({
                 "n_readings": wt["n_readings"], "since": wt["since"],
                 "min_readings": wt["min_readings"], "min_span_days": wt["min_span_days"],
                 "checkpoint": wt["checkpoint"],
-                "ghost_svg": charts.ghost_preview_svg(),
+                "points_svg": charts.weight_raw_points_svg(wt["raw_points"]),
             })
         else:
             weight_module.update({
@@ -264,16 +369,19 @@ def today(request: Request):
             "today.html",
             {
                 "active_page": "today",
-                "today_label": today_date.strftime("%A, %B ") + str(today_date.day),
-                "readiness": snapshot["readiness"],
+                "today_label": real_today.strftime("%A, %B ") + str(real_today.day),
+                "through_label": f"all figures through midnight · {snap_date.strftime('%a %b')} {snap_date.day}",
                 "last_synced_label": last_synced_label,
                 "rails": rails,
+                "rails_eyebrow": rails_eyebrow,
                 "yesterday": yesterday,
                 "brief_card": brief_card,
                 "steps_module": steps_module,
+                "monthly_steps_module": monthly_steps_module,
+                "sessions_module": sessions_module,
                 "calendar_module": calendar_module,
-                "month_rows": month_rows,
                 "calories_module": calories_module,
+                "monthly_calories_module": monthly_calories_module,
                 "recovery_module": recovery_module,
                 "weight_module": weight_module,
             },

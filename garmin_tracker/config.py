@@ -1,6 +1,6 @@
 """Loads settings from .env with sensible defaults."""
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -26,6 +26,18 @@ def local_today() -> date:
     """The one authoritative "what day is it" for every report - always
     resolved in LOCAL_TZ regardless of the host machine's own clock/tz."""
     return datetime.now(LOCAL_TZ).date()
+
+
+def snapshot_date() -> date:
+    """The latest COMPLETE day - local_today() minus one. Every dashboard
+    figure, coach brief, and weekly review covers data through this date,
+    never the current (necessarily partial) calendar day. This is what
+    removes "not yet synced" as a state entirely: nothing ever reports on
+    a day that hasn't finished yet, so there's nothing partial to be
+    not-yet-synced about. Sync itself (sync.py) still pulls through the
+    real current day - only the reporting/analytics layer applies this
+    cutoff."""
+    return local_today() - timedelta(days=1)
 
 GOALS_PATH = BASE_DIR / "config" / "goals.yaml"
 

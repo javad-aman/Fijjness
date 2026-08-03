@@ -111,7 +111,7 @@ def validate_snapshot(conn, brief: dict, intended_date: Optional[str] = None) ->
     build_snapshot assertion, the readiness gate) - this re-verifies against
     the stored snapshot independently, since generation and send are
     separate jobs that could in principle disagree."""
-    intended_date = intended_date or config.local_today().isoformat()
+    intended_date = intended_date or config.snapshot_date().isoformat()
     snapshot = json.loads(brief["metrics_snapshot_json"])
     failures = []
 
@@ -122,10 +122,10 @@ def validate_snapshot(conn, brief: dict, intended_date: Optional[str] = None) ->
 
     snapshot_date = date.fromisoformat(snapshot_date_str)
 
-    today_steps = (snapshot.get("steps_pace") or {}).get("actual")
-    yesterday_steps = (snapshot.get("yesterday") or {}).get("steps")
-    if today_steps is not None and yesterday_steps is not None and today_steps != 0 and today_steps == yesterday_steps:
-        failures.append(f"today's steps ({today_steps}) equal yesterday's steps - likely a date-resolution bug")
+    # No today-vs-yesterday steps collision check anymore - under the
+    # midnight cutoff there's only one canonical date (snapshot_date), so
+    # there's nothing left for a "today" query and a "yesterday" query to
+    # accidentally collide on (see config.snapshot_date / build_snapshot).
 
     if re.search(r"\bNone\b|\bnull\b|\bNaN\b", brief.get("body_markdown", "")):
         failures.append("brief text contains a literal None/null/NaN token")
@@ -140,12 +140,13 @@ def validate_snapshot(conn, brief: dict, intended_date: Optional[str] = None) ->
         if abs(strength_actual - sql_count) > SESSION_COUNT_TOLERANCE:
             failures.append(f"strength session count ({strength_actual}) vs. direct SQL count ({sql_count}) differ by more than {SESSION_COUNT_TOLERANCE}")
 
-    week_start = snapshot_date - timedelta(days=snapshot_date.weekday())
+    # Racquet is monthly now too (goals.yaml's racquet.monthly_sessions) -
+    # recount against the same month window as strength, not a week.
     racquet_actual = (snapshot.get("racquet_pace") or {}).get("actual")
     if racquet_actual is not None:
         sql_count = db.fetch_all_dicts(
             conn, "SELECT COUNT(*) as n FROM activities WHERE date >= ? AND date <= ? AND bucket = 'racquet'",
-            (week_start.isoformat(), snapshot_date.isoformat()),
+            (month_start.isoformat(), snapshot_date.isoformat()),
         )[0]["n"]
         if abs(racquet_actual - sql_count) > SESSION_COUNT_TOLERANCE:
             failures.append(f"racquet session count ({racquet_actual}) vs. direct SQL count ({sql_count}) differ by more than {SESSION_COUNT_TOLERANCE}")
@@ -198,9 +199,13 @@ def render_email(brief: dict) -> tuple[str, str]:
     snapshot = json.loads(brief["metrics_snapshot_json"])
 
     steps_pace = snapshot.get("steps_pace") or {}
+    strength_pace = snapshot.get("strength_pace") or {}
+    racquet_pace = snapshot.get("racquet_pace") or {}
     pace_rows = (
         "<table style='border-collapse:collapse;font-size:14px;'>"
-        + _pace_rail_table_row("Steps today", steps_pace.get("actual"), steps_pace.get("target"))
+        + _pace_rail_table_row("Steps this month", steps_pace.get("actual"), steps_pace.get("target"))
+        + _pace_rail_table_row("Strength this month", strength_pace.get("actual"), strength_pace.get("target"))
+        + _pace_rail_table_row("Racquet this month", racquet_pace.get("actual"), racquet_pace.get("target"))
         + "</table>"
     )
 
@@ -256,7 +261,7 @@ def main():
             raise RuntimeError(f"No stored '{args.kind}' brief to send - run coach generation first.")
         brief = rows[0]
 
-        intended_date = config.local_today().isoformat()
+        intended_date = config.snapshot_date().isoformat()
         failures = validate_snapshot(conn, brief, intended_date)
         if failures:
             subject, html_body = render_incomplete_notice(args.kind, intended_date, failures)
