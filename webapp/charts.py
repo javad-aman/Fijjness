@@ -409,7 +409,7 @@ def daily_calories_month_svg(data: dict, width: int = 900, height: int = 220) ->
         return f"<svg width='{width}' height='{height}'></svg>"
 
     values = [d["active_calories"] for d in days]
-    max_val = max(values) * 1.1
+    max_val = max(values) * 1.1 or 1  # real days with active_calories==0 (not just missing) are possible early in a sync
 
     pad_left, pad_right, pad_bottom, pad_top = 44, 12, 26, 14
     plot_w = width - pad_left - pad_right
