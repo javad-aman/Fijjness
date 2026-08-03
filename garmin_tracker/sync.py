@@ -25,6 +25,16 @@ SOURCES = ["daily_metrics", "activities", "training_status", "intraday_steps"]
 # first time it runs, unlike the other sources' default full-year window.
 INITIAL_BACKFILL_DAYS_OVERRIDE = {"intraday_steps": 3}
 
+# A watch that hasn't synced to the phone yet by the time this runs makes
+# Garmin's API legitimately return null/zero for a very recent day - the
+# checkpoint still advances past it (the API call itself succeeded), so a
+# pure append-only cursor would never re-check that day once it's synced
+# late, even though daily.yml explicitly schedules a second same-day run
+# ("11:00 - catch late-syncing watch data") meaning to catch exactly this.
+# Re-checking the trailing OVERLAP_DAYS on every run is what actually makes
+# that second run useful.
+OVERLAP_DAYS = 2
+
 
 def daterange(start: date, end: date):
     d = start
@@ -44,7 +54,8 @@ def resolve_window(conn, source: str, full: bool, days: int) -> tuple[date, date
         return today - timedelta(days=initial_days), today
 
     last_date = datetime.strptime(last, "%Y-%m-%d").date()
-    return last_date + timedelta(days=1), today
+    start = last_date + timedelta(days=1)
+    return min(start, today - timedelta(days=OVERLAP_DAYS)), today
 
 
 def sync_daily_metrics(client, conn, start: date, end: date) -> None:
