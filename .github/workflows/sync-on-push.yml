@@ -1,0 +1,61 @@
+name: Sync on push
+
+# Render auto-deploys the app itself straight from a push to main, but that
+# only updates the code - the data stays whatever the last scheduled sync
+# (see daily.yml, 04:30/11:00 Central) left it as, which could be hours
+# stale. This runs the same sync immediately on every push so the dashboard
+# reflects current data right after a deploy, not just after the next
+# scheduled run.
+on:
+  push:
+    branches: [main]
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore Garmin session cache
+        uses: actions/cache/restore@v4
+        with:
+          path: .garmin_tokens
+          key: garmin-tokens-${{ github.run_id }}
+          restore-keys: |
+            garmin-tokens-
+
+      - name: Seed Garmin session on first run
+        run: |
+          if [ ! -s .garmin_tokens/garmin_tokens.json ]; then
+            echo "No cached session found - seeding from GARMIN_TOKENS_SEED_B64 secret"
+            mkdir -p .garmin_tokens
+            echo "$GARMIN_TOKENS_SEED_B64" | base64 -d > .garmin_tokens/garmin_tokens.json
+          fi
+        env:
+          GARMIN_TOKENS_SEED_B64: ${{ secrets.GARMIN_TOKENS_SEED_B64 }}
+
+      - name: Sync Garmin data to Turso
+        env:
+          GARMIN_EMAIL: ${{ secrets.GARMIN_EMAIL }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python -m garmin_tracker.sync
+
+      - name: Run statistics engine (anomalies, lagged hypotheses, findings)
+        env:
+          TURSO_DATABASE_URL: ${{ secrets.TURSO_DATABASE_URL }}
+          TURSO_AUTH_TOKEN: ${{ secrets.TURSO_AUTH_TOKEN }}
+        run: python -m garmin_tracker.stats_engine
+
+      - name: Save Garmin session cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: .garmin_tokens
+          key: garmin-tokens-${{ github.run_id }}
