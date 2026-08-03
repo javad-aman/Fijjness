@@ -32,8 +32,10 @@ INITIAL_BACKFILL_DAYS_OVERRIDE = {"intraday_steps": 3}
 # late, even though daily.yml explicitly schedules a second same-day run
 # ("11:00 - catch late-syncing watch data") meaning to catch exactly this.
 # Re-checking the trailing OVERLAP_DAYS on every run is what actually makes
-# that second run useful.
-OVERLAP_DAYS = 2
+# that second run useful. 5 days (not 2) because the real gap observed
+# in production spanned more than a couple of days - a watch can go
+# unsynced over a multi-day stretch, not just overnight.
+OVERLAP_DAYS = 5
 
 
 def daterange(start: date, end: date):
