@@ -211,7 +211,10 @@ def generate_daily_brief(conn, goals: dict, today: Optional[date] = None) -> dic
         "last_weekly_review": (recent_briefs(conn, "weekly", 1) or [None])[0],
     }, default=str)
 
-    body = _call_claude(DAILY_SYSTEM_PROMPT, user_content, max_tokens=2048)
+    # The v3 bullet-group format (four labeled sections) runs longer than
+    # the old "5 sentences" prompt did - 2048 was already one bump up from
+    # 1024 for the old format and isn't enough headroom for this one.
+    body = _call_claude(DAILY_SYSTEM_PROMPT, user_content, max_tokens=4096)
     return _store_brief(conn, "daily", today, body, snapshot)
 
 
