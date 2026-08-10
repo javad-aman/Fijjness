@@ -323,9 +323,9 @@ def today(request: Request):
         # ---- Monthly calories by source ----
         mcal = analytics.monthly_calories_by_source(conn, snap_date)
         latest = mcal[-1]
-        top_key = max(("racquet", "strength", "cardio", "unlogged"), key=lambda k: latest[k])
+        top_key = max(("racquet", "strength", "cardio", "other", "unlogged"), key=lambda k: latest[k])
         top_pct = round(latest[top_key] / latest["total"] * 100) if latest["total"] else 0
-        top_names = {"racquet": "Racquet sports", "strength": "Strength", "cardio": "Cardio", "unlogged": "Unlogged movement"}
+        top_names = {"racquet": "Racquet sports", "strength": "Strength", "cardio": "Cardio", "other": "Other activity", "unlogged": "Unlogged movement"}
         monthly_calories_module = {
             "svg": charts.monthly_calories_stacked_svg(mcal),
             "finding": f"{top_names[top_key]} {'are' if top_key != 'strength' else 'is'} {top_pct}% of your {latest['month_label']} burn",
@@ -334,7 +334,7 @@ def today(request: Request):
 
         # ---- July (current month) calendar ----
         cal = analytics.current_month_calendar(conn, snap_date)
-        n_training = cal["counts"]["strength"] + cal["counts"]["racquet"] + cal["counts"]["cardio"]
+        n_training = cal["counts"]["strength"] + cal["counts"]["racquet"] + cal["counts"]["cardio"] + cal["counts"]["other"]
         calendar_module = {
             "svg": charts.month_calendar_svg(cal),
             "finding": f"{n_training} training days, {cal['counts']['rest']} rest days in {snap_date.strftime('%B')}",

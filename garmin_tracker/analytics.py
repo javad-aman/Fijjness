@@ -1118,6 +1118,7 @@ def sessions_by_month(conn, months: int = 6, today: Optional[date] = None) -> li
             "strength": by_bucket.get("strength", 0),
             "racquet": by_bucket.get("racquet", 0),
             "cardio": by_bucket.get("cardio", 0),
+            "other": by_bucket.get("other", 0),
             "total": sum(by_bucket.values()),
         })
     return rows
@@ -1149,7 +1150,7 @@ def _day_dominant_bucket(conn, start: date, end: date) -> dict:
         conn, "SELECT date, bucket FROM activities WHERE date >= ? AND date <= ?",
         (start.isoformat(), end.isoformat()),
     )
-    priority = {"strength": 3, "racquet": 2, "cardio": 1}
+    priority = {"strength": 4, "racquet": 3, "cardio": 2, "other": 1}
     by_date: dict[str, str] = {}
     for r in rows:
         cur = by_date.get(r["date"])
@@ -1223,7 +1224,7 @@ def daily_calories_current_month(conn, today: Optional[date] = None) -> dict:
     avg = round(total / len(values))
     rest_values = [d["active_calories"] for d in days if d["bucket"] is None]
 
-    counts = {"strength": 0, "racquet": 0, "cardio": 0, "rest": 0}
+    counts = {"strength": 0, "racquet": 0, "cardio": 0, "other": 0, "rest": 0}
     for d in days:
         counts[d["bucket"] or "rest"] += 1
 
@@ -1303,13 +1304,16 @@ def monthly_calories_by_source(conn, today: Optional[date] = None, months: int =
             (m_start.isoformat(), m_end.isoformat()),
         )
         month_total = round(total_rows[0]["total"] or 0)
-        logged = sum(v for k, v in by_bucket.items() if k in ("strength", "racquet", "cardio"))
+        # "other" (yoga, golf, ...) is still a logged session - only calories
+        # from no session at all belong in "unlogged".
+        logged = sum(v for k, v in by_bucket.items() if k in ("strength", "racquet", "cardio", "other"))
 
         result.append({
             "month_label": m_start.strftime("%b"),
             "racquet": by_bucket.get("racquet", 0),
             "strength": by_bucket.get("strength", 0),
             "cardio": by_bucket.get("cardio", 0),
+            "other": by_bucket.get("other", 0),
             "unlogged": max(month_total - logged, 0),
             "total": month_total,
         })
@@ -1332,7 +1336,7 @@ def current_month_calendar(conn, today: Optional[date] = None) -> dict:
         days.append({"date": d.isoformat(), "bucket": dominant.get(d.isoformat())})
         d += timedelta(days=1)
 
-    counts = {"strength": 0, "racquet": 0, "cardio": 0, "rest": 0}
+    counts = {"strength": 0, "racquet": 0, "cardio": 0, "other": 0, "rest": 0}
     longest_streak = longest_gap = cur_streak = cur_gap = 0
     for day in days:
         counts[day["bucket"] or "rest"] += 1

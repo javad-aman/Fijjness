@@ -154,6 +154,7 @@
       <span><i style="background:var(--b-strength)"></i>Strength</span>
       <span><i style="background:var(--b-racquet)"></i>Racquet</span>
       <span><i style="background:var(--b-cardio)"></i>Cardio</span>
+      <span><i style="background:var(--b-other)"></i>Other</span>
     </div>
   </div>
 
@@ -175,6 +176,9 @@
       <span><i style="background:var(--b-strength)"></i>Strength day <b>{{ calories_module.counts.strength }}</b></span>
       <span><i style="background:var(--b-racquet)"></i>Racquet day <b>{{ calories_module.counts.racquet }}</b></span>
       <span><i style="background:var(--b-cardio)"></i>Cardio day <b>{{ calories_module.counts.cardio }}</b></span>
+      {% if calories_module.counts.other %}
+      <span><i style="background:var(--b-other)"></i>Other day <b>{{ calories_module.counts.other }}</b></span>
+      {% endif %}
       <span><i style="background:var(--b-unlogged)"></i>Rest day <b>{{ calories_module.counts.rest }}</b></span>
     </div>
     {% endif %}
@@ -201,6 +205,7 @@
       <span><i style="background:var(--b-racquet)"></i>Racquet</span>
       <span><i style="background:var(--b-strength)"></i>Strength</span>
       <span><i style="background:var(--b-cardio)"></i>Cardio</span>
+      <span><i style="background:var(--b-other)"></i>Other</span>
       <span><i style="background:var(--b-unlogged)"></i>Unlogged movement</span>
     </div>
   </div>
@@ -214,6 +219,9 @@
       <span><i style="background:var(--b-strength)"></i>Strength <b>{{ calendar_module.counts.strength }}</b></span>
       <span><i style="background:var(--b-racquet)"></i>Racquet <b>{{ calendar_module.counts.racquet }}</b></span>
       <span><i style="background:var(--b-cardio)"></i>Cardio <b>{{ calendar_module.counts.cardio }}</b></span>
+      {% if calendar_module.counts.other %}
+      <span><i style="background:var(--b-other)"></i>Other <b>{{ calendar_module.counts.other }}</b></span>
+      {% endif %}
       <span><i style="background:var(--line)"></i>Rest <b>{{ calendar_module.counts.rest }}</b></span>
     </div>
   </div>

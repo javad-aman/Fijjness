@@ -31,7 +31,8 @@ BUCKET_COLORS = {
     "strength": NEUTRAL,
     "racquet": "#2FB8C6",  # teal - deliberately not --ahead, see above
     "cardio": WARN,
-    "other": "#49566A",
+    "other": "#8B7BB8",    # a real logged activity (yoga, golf, ...) - must
+                           # read differently from an actual rest day below
     "unlogged": "#49566A",
 }
 
@@ -432,7 +433,7 @@ def daily_calories_month_svg(data: dict, width: int = 900, height: int = 220) ->
         parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g:,.0f}</text>")
         g += grid_step
 
-    bucket_names = {"strength": "Strength", "racquet": "Racquet", "cardio": "Cardio", None: "Rest day"}
+    bucket_names = {"strength": "Strength", "racquet": "Racquet", "cardio": "Cardio", "other": "Other", None: "Rest day"}
     for i, day in enumerate(days):
         v = day["active_calories"]
         x = pad_left + i * gap + (gap - bar_w) / 2
@@ -511,7 +512,7 @@ def sessions_month_stacked_svg(rows: list, width: int = 520, height: int = 240) 
     if n == 0:
         return f"<svg width='{width}' height='{height}'></svg>"
 
-    max_val = max(r["strength"] + r["racquet"] + r["cardio"] for r in rows) * 1.15 or 1
+    max_val = max(r["strength"] + r["racquet"] + r["cardio"] + r["other"] for r in rows) * 1.15 or 1
     pad_left, pad_right, pad_bottom, pad_top = 32, 12, 28, 26
     plot_w = width - pad_left - pad_right
     plot_h = height - pad_bottom - pad_top
@@ -532,11 +533,11 @@ def sessions_month_stacked_svg(rows: list, width: int = 520, height: int = 240) 
         parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g:.0f}</text>")
         g += grid_step
 
-    segments = [("strength", "Strength"), ("racquet", "Racquet"), ("cardio", "Cardio")]
+    segments = [("strength", "Strength"), ("racquet", "Racquet"), ("cardio", "Cardio"), ("other", "Other")]
     for i, r in enumerate(rows):
         x = pad_left + i * gap + (gap - bar_w) / 2
         acc = 0
-        total = r["strength"] + r["racquet"] + r["cardio"]
+        total = r["strength"] + r["racquet"] + r["cardio"] + r["other"]
         for key, name in segments:
             v = r[key]
             if not v:
@@ -585,7 +586,7 @@ def monthly_calories_stacked_svg(rows: list, width: int = 520, height: int = 240
         parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g/1000:.0f}k</text>")
         g += grid_step
 
-    segments = [("racquet", "Racquet"), ("strength", "Strength"), ("cardio", "Cardio"), ("unlogged", "Unlogged movement")]
+    segments = [("racquet", "Racquet"), ("strength", "Strength"), ("cardio", "Cardio"), ("other", "Other"), ("unlogged", "Unlogged movement")]
     for i, r in enumerate(rows):
         x = pad_left + i * gap + (gap - bar_w) / 2
         acc = 0
@@ -632,7 +633,7 @@ def month_calendar_svg(cal: dict, width: int = 420) -> str:
     for i, label in enumerate(dow):
         parts.append(f"<text x='0' y='{i * (cell + gap) + cell/2 + 4:.1f}' {FONT} font-size='11' fill='{DIM}'>{label}</text>")
 
-    bucket_names = {"strength": "Strength", "racquet": "Racquet", "cardio": "Cardio", None: "Rest day"}
+    bucket_names = {"strength": "Strength", "racquet": "Racquet", "cardio": "Cardio", "other": "Other", None: "Rest day"}
     for i, day in enumerate(days):
         idx = weekday_offset + i
         col = idx // 7
