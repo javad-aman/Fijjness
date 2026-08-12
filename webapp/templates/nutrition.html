@@ -3,87 +3,118 @@
 
 {% block content %}
 
-<div class="eyebrow" style="margin-bottom: 12px;">Nutrition</div>
-<div class="card">
-  <p class="compare" style="margin: 0;">
-    From a manually-exported MyFitnessPal data file (see
-    <code>scripts/import_myfitnesspal.py</code>) - MyFitnessPal has no public
-    API, so this only updates when a fresh export is re-imported, not on the
-    usual sync schedule.
-  </p>
+<div class="header">
+  <div class="date">Nutrition</div>
+  <div class="through">from a manually-exported MyFitnessPal file - see scripts/import_myfitnesspal.py</div>
 </div>
 
-{% if daily_module.state == 'insufficient' %}
-<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Daily calories</div>
-<div class="card">
-  <p class="compare" style="margin: 0;">No nutrition data imported yet.</p>
-</div>
-{% else %}
-<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Daily calories</div>
-<div class="card">
-  <p class="chart-title" style="margin: 0 0 2px;">
-    Averaging {{ "{:,}".format(daily_module.avg_calories) }} cal/day
-  </p>
-  <p class="compare" style="margin: 0 0 12px;">{{ daily_module.subtitle }}</p>
-  {{ daily_module.svg | safe }}
-  <div class="row" style="margin-top: 14px; flex-wrap: wrap; gap: 14px;">
-    <span class="compare">Protein <b class="mono">{{ daily_module.avg_protein }}g</b>/day avg</span>
-    <span class="compare">Carbs <b class="mono">{{ daily_module.avg_carbs }}g</b>/day avg</span>
-    <span class="compare">Fat <b class="mono">{{ daily_module.avg_fat }}g</b>/day avg</span>
-    <span class="compare">Sodium <b class="mono">{{ "{:,}".format(daily_module.avg_sodium) }}mg</b>/day avg</span>
+<div class="grid">
+
+  {% for w_key, w_title in (('day', 'Last logged day'), ('week', 'This week · last 7 days'), ('month', 'This month')) %}
+  {% set w = windows[w_key] %}
+  <div class="card c4">
+    <div class="eyebrow" style="margin-bottom: 4px;">{{ w_title }}</div>
+    {% if w.state != 'full' %}
+    <p class="compare" style="margin: 10px 0 0;">No nutrition data imported for this window yet.</p>
+    {% else %}
+    <div class="chart-sub" style="margin-bottom: 10px;">{{ w.range_label }} · {{ w.n_days }} day{{ 's' if w.n_days != 1 else '' }} logged</div>
+
+    <div class="nutrient-row">
+      <div class="nutrient-row-head">
+        <span class="label">Calories{{ ' /day avg' if w.is_average else '' }}</span>
+        <span class="nutrient-val">{{ "{:,}".format(w.calories.value) }}{% if w.calories.target %} <span class="compare">/ {{ "{:,}".format(w.calories.target) }} target</span>{% endif %}</span>
+      </div>
+      {% if w.calories.target %}
+      <div class="nutrient-track"><div class="nutrient-fill {{ 'good' if w.calories.value <= w.calories.target else 'under' }}" style="width: {{ [w.calories.value / w.calories.target * 100, 100] | min }}%"></div></div>
+      {% endif %}
+    </div>
+
+    {% if w_key == 'week' and catch_up %}
+    <p class="compare" style="margin: 10px 0 14px; font-size: 12.5px;">
+      To hold a {{ catch_up.target }}/day average this week: ~<b class="mono">{{ "{:,}".format(catch_up.required_avg_remaining) }}</b>/day
+      for the remaining {{ catch_up.days_remaining }} day{{ 's' if catch_up.days_remaining != 1 else '' }}
+      {% if not catch_up.fully_logged %}<br>({{ catch_up.n_logged }} of {{ catch_up.days_elapsed }} days logged so far this week - rough estimate){% endif %}
+    </p>
+    {% endif %}
+
+    <div style="margin-top: 14px;">
+      {% for n in w.nutrients %}
+      <div class="nutrient-row">
+        <div class="nutrient-row-head">
+          <span class="label">{{ n.label }}</span>
+          <span class="nutrient-val {{ n.status }}">{{ n.value }}{{ n.unit }} {{ '≥' if n.direction == 'min' else '≤' }} {{ n.goal }}{{ n.unit }}</span>
+        </div>
+        <div class="nutrient-track"><div class="nutrient-fill {{ n.status }}" style="width: {{ n.fill_pct }}%"></div></div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
   </div>
-  <div class="row" style="margin-top: 6px;">
-    <span class="compare">Highest day <b class="mono">{{ "{:,}".format(daily_module.best_day_calories) }}</b> cal</span>
-    <span class="compare">Lowest day <b class="mono">{{ "{:,}".format(daily_module.lowest_day_calories) }}</b> cal</span>
+  {% endfor %}
+
+  {% if daily_module.state == 'insufficient' %}
+  <div class="card c8">
+    <div class="eyebrow" style="margin-bottom: 12px;">Daily calories</div>
+    <p class="compare" style="margin: 0;">No nutrition data imported yet.</p>
   </div>
-</div>
-{% endif %}
+  {% else %}
+  <div class="card c8">
+    <div class="chart-title">Averaging {{ "{:,}".format(daily_module.avg_calories) }} cal/day</div>
+    <div class="chart-sub">{{ daily_module.subtitle }}</div>
+    <div class="chart-frame">{{ daily_module.svg | safe }}</div>
+    <div class="row" style="margin-top: 14px; flex-wrap: wrap; gap: 14px;">
+      <span class="compare">Protein <b class="mono">{{ daily_module.avg_protein }}g</b>/day avg</span>
+      <span class="compare">Carbs <b class="mono">{{ daily_module.avg_carbs }}g</b>/day avg</span>
+      <span class="compare">Fat <b class="mono">{{ daily_module.avg_fat }}g</b>/day avg</span>
+      <span class="compare">Sodium <b class="mono">{{ "{:,}".format(daily_module.avg_sodium) }}mg</b>/day avg</span>
+    </div>
+    <div class="row" style="margin-top: 6px;">
+      <span class="compare">Highest day <b class="mono">{{ "{:,}".format(daily_module.best_day_calories) }}</b> cal</span>
+      <span class="compare">Lowest day <b class="mono">{{ "{:,}".format(daily_module.lowest_day_calories) }}</b> cal</span>
+    </div>
+  </div>
+  {% endif %}
 
-{% if meals_module.state == 'full' %}
-<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Where calories come from</div>
-<div class="card">
-  <p class="compare" style="margin: 0 0 12px;">Share of total calories by meal, across the whole imported window</p>
-  {{ meals_module.svg | safe }}
-</div>
-{% endif %}
+  {% if meals_module.state == 'full' %}
+  <div class="card c6">
+    <div class="eyebrow" style="margin-bottom: 4px;">Where calories come from</div>
+    <div class="chart-sub" style="margin-top: 6px;">Share of total calories by meal, across the whole imported window</div>
+    {{ meals_module.svg | safe }}
+  </div>
+  {% endif %}
 
-{% if protein_module.state == 'full' %}
-<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Protein per pound of bodyweight</div>
-<div class="card">
-  <p class="chart-title" style="margin: 0 0 2px;">{{ protein_module.current }} g/lb most recent · {{ protein_module.avg }} g/lb average</p>
-  <p class="compare" style="margin: 0 0 12px;">Daily protein logged divided by same-day (or nearest prior) weight - your own trend, no external target implied</p>
-  {{ protein_module.svg | safe }}
-</div>
-{% endif %}
+  {% if protein_module.state == 'full' %}
+  <div class="card c6">
+    <div class="chart-title">{{ protein_module.current }} g/lb most recent · {{ protein_module.avg }} g/lb average</div>
+    <div class="chart-sub">Protein per pound of bodyweight - your own trend, no external target implied</div>
+    {{ protein_module.svg | safe }}
+  </div>
+  {% endif %}
 
-{% if weight_cal_module.state == 'full' %}
-<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Weight and calories, side by side</div>
-<div class="card">
-  <p class="compare" style="margin: 0 0 12px;">
-    Visual comparison only - not enough history yet for a statistically meaningful
-    relationship between the two, so none is claimed here.
-  </p>
-  {{ weight_cal_module.svg | safe }}
-</div>
-{% endif %}
+  {% if weight_cal_module.state == 'full' %}
+  <div class="card c8">
+    <div class="eyebrow" style="margin-bottom: 4px;">Weight and calories, side by side</div>
+    <div class="chart-sub" style="margin-top: 6px;">Visual comparison only - not enough history yet for a statistically meaningful relationship, so none is claimed here</div>
+    {{ weight_cal_module.svg | safe }}
+  </div>
+  {% endif %}
 
-<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Training days vs. rest days</div>
-{% if comparison_cards %}
-{% for c in comparison_cards %}
-<div class="card">
-  <p style="margin: 0 0 8px;">{{ c.description }}</p>
-  {{ c.svg | safe }}
-  <p class="compare" style="margin: 8px 0 0;">n={{ c.n_effective }} days per group (Hedges' g)</p>
-</div>
-{% endfor %}
-{% else %}
-<div class="card">
-  <p class="compare" style="margin: 0;">
-    Not enough nutrition history yet to compare training days against rest days
-    reliably (needs at least 10 days logged in each group). This isn't a broken
-    page - keep importing fresh exports and check back.
-  </p>
-</div>
-{% endif %}
+  <div class="card c4">
+    <div class="eyebrow" style="margin-bottom: 12px;">Training days vs. rest days</div>
+    {% if comparison_cards %}
+    {% for c in comparison_cards %}
+    <p style="margin: 0 0 8px; font-size: 14px;">{{ c.description }}</p>
+    {{ c.svg | safe }}
+    <p class="compare" style="margin: 8px 0 14px;">n={{ c.n_effective }} days per group (Hedges' g)</p>
+    {% endfor %}
+    {% else %}
+    <p class="compare" style="margin: 0;">
+      Not enough nutrition history yet to compare training days against rest days
+      reliably (needs at least 10 days logged in each group). Keep importing fresh
+      exports and check back.
+    </p>
+    {% endif %}
+  </div>
 
+</div>
 {% endblock %}

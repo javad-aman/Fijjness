@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <div class="container {{ 'container--wide' if active_page == 'today' else '' }}">
+  <div class="container {{ 'container--wide' if active_page in ('today', 'nutrition') else '' }}">
     <nav class="topnav">
       <a href="/" class="{{ 'active' if active_page == 'today' else '' }}">Today</a>
       <a href="/activity" class="{{ 'active' if active_page == 'activity' else '' }}">Activity</a>

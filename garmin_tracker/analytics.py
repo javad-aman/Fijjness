@@ -282,6 +282,56 @@ def trend_weight(conn, goals: dict, today: Optional[date] = None) -> dict:
     }
 
 
+def weight_projection_path(current_trend: float, rate_per_week: Optional[float],
+                            rate_ci: Optional[tuple], checkpoint: Optional[dict],
+                            today: date, points_per_week: int = 1) -> Optional[list[dict]]:
+    """Straight-line projection from today's trend weight to the next
+    checkpoint, using the same Theil-Sen rate + 90% CI trend_weight()
+    already computes - never a fabricated curve. Each point carries the
+    central estimate plus the CI-bound "best"/"worst" case, where best/
+    worst are direction-aware (the CI bound that moves toward the target
+    faster is "best", regardless of whether the goal is to gain or lose).
+    Returns None if there's no checkpoint or no rate to project - a
+    projection implies a real destination and a real observed rate; this
+    never invents either."""
+    if not checkpoint or rate_per_week is None or rate_ci is None:
+        return None
+
+    checkpoint_date = _parse_date(checkpoint["date"])
+    target = checkpoint["target"]
+    total_days = (checkpoint_date - today).days
+    if total_days <= 0:
+        return None
+
+    losing_toward_target = target < current_trend
+    low, high = rate_ci
+    best_rate = min(low, high) if losing_toward_target else max(low, high)
+    worst_rate = max(low, high) if losing_toward_target else min(low, high)
+
+    step_days = max(7 // points_per_week, 1)
+    path = []
+    d = 0
+    while d <= total_days:
+        day = today + timedelta(days=d)
+        weeks = d / 7
+        path.append({
+            "date": day.isoformat(),
+            "expected": round(current_trend + rate_per_week * weeks, 1),
+            "best": round(current_trend + best_rate * weeks, 1),
+            "worst": round(current_trend + worst_rate * weeks, 1),
+        })
+        d += step_days
+    if path[-1]["date"] != checkpoint_date.isoformat():
+        weeks = total_days / 7
+        path.append({
+            "date": checkpoint_date.isoformat(),
+            "expected": round(current_trend + rate_per_week * weeks, 1),
+            "best": round(current_trend + best_rate * weeks, 1),
+            "worst": round(current_trend + worst_rate * weeks, 1),
+        })
+    return path
+
+
 # ---- Consistency / burst detection --------------------------------------
 
 def front_load_index(conn, bucket: str = "strength", today: Optional[date] = None) -> Optional[float]:
@@ -1045,6 +1095,10 @@ def weight_chart_data(conn, goals: dict, today: Optional[date] = None,
         {"date": r["date"], "weight_lb": r["weight_lb"], "ewma": round(e, 2)}
         for r, e in zip(full_rows, full_ewma)
     ]
+    result["projection"] = weight_projection_path(
+        result["trend_weight_lb"], result["rate_lb_per_week"],
+        result["rate_lb_per_week_ci"], result["checkpoint"], today,
+    )
     return result
 
 
@@ -1587,4 +1641,135 @@ def weight_and_calories_series(conn, days: int = 60, today: Optional[date] = Non
         "weight": weight_rows,
         "range_start": min(nutrition_rows[0]["date"], weight_rows[0]["date"]),
         "range_end": today.isoformat(),
+    }
+
+
+# (key, label, unit, goals.yaml key or None, direction "min"/"max"). The 4
+# %DV nutrients have no goals.yaml key - 100% *is* the reference by
+# definition of %DV, nothing to look up. See goals.yaml's nutrition section
+# for which numbers are the user's own vs. a researched FDA Daily Value.
+NUTRIENT_SPECS = [
+    ("protein_g", "Protein", "g", "protein_g_min", "min"),
+    ("fat_g", "Fat", "g", "fat_g_min", "min"),
+    ("sugar_g", "Sugar", "g", "sugar_g_max", "max"),
+    ("saturated_fat_g", "Saturated fat", "g", "saturated_fat_g_max", "max"),
+    ("fiber_g", "Fiber", "g", "fiber_g_min", "min"),
+    ("sodium_mg", "Sodium", "mg", "sodium_mg_max", "max"),
+    ("potassium_mg", "Potassium", "mg", "potassium_mg_min", "min"),
+    ("cholesterol_mg", "Cholesterol", "mg", "cholesterol_mg_max", "max"),
+    ("vitamin_a_pct", "Vitamin A", "% DV", None, "min"),
+    ("vitamin_c_pct", "Vitamin C", "% DV", None, "min"),
+    ("calcium_pct", "Calcium", "% DV", None, "min"),
+    ("iron_pct", "Iron", "% DV", None, "min"),
+]
+
+
+def nutrition_window_summary(conn, goals: dict, window: str, today: Optional[date] = None) -> dict:
+    """Every tracked nutrient vs. its goal for one of three views:
+    "day" (the most recent logged day, a raw total), "week" (rolling last 7
+    days, averaged per day), "month" (calendar month to date, averaged per
+    day). Averaging per day (not summing) is what makes the week/month
+    views comparable to the same daily goal a single day is checked
+    against."""
+    today = today or config.snapshot_date()
+    nutrition_goals = goals.get("nutrition", {})
+
+    if window == "day":
+        rows = db.fetch_all_dicts(
+            conn, "SELECT * FROM nutrition_daily WHERE date <= ? ORDER BY date DESC LIMIT 1",
+            (today.isoformat(),),
+        )
+        is_average = False
+        range_label = rows[0]["date"] if rows else None
+    elif window == "week":
+        start = today - timedelta(days=6)
+        rows = db.fetch_all_dicts(
+            conn, "SELECT * FROM nutrition_daily WHERE date >= ? AND date <= ? ORDER BY date",
+            (start.isoformat(), today.isoformat()),
+        )
+        is_average = True
+        range_label = f"{start.isoformat()} – {today.isoformat()}"
+    elif window == "month":
+        month_start = today.replace(day=1)
+        rows = db.fetch_all_dicts(
+            conn, "SELECT * FROM nutrition_daily WHERE date >= ? AND date <= ? ORDER BY date",
+            (month_start.isoformat(), today.isoformat()),
+        )
+        is_average = True
+        range_label = f"{month_start.isoformat()} – {today.isoformat()}"
+    else:
+        raise ValueError(f"unknown window: {window!r}")
+
+    if not rows:
+        return {"state": "insufficient", "window": window}
+
+    n = len(rows)
+    nutrients = []
+    for key, label, unit, goal_key, direction in NUTRIENT_SPECS:
+        total = sum(r[key] or 0 for r in rows)
+        value = round(total / n, 1) if is_average else round(total, 1)
+        goal = 100 if goal_key is None else nutrition_goals.get(goal_key)
+        status = None
+        if goal is not None:
+            status = "good" if (value >= goal if direction == "min" else value <= goal) else ("under" if direction == "min" else "over")
+        nutrients.append({
+            "key": key, "label": label, "unit": unit, "value": value,
+            "goal": goal, "direction": direction, "status": status,
+        })
+
+    cal_total = sum(r["calories"] or 0 for r in rows)
+    cal_value = round(cal_total / n) if is_average else round(cal_total)
+
+    return {
+        "state": "full",
+        "window": window,
+        "n_days": n,
+        "range_label": range_label,
+        "is_average": is_average,
+        "calories": {"value": cal_value, "target": nutrition_goals.get("calorie_avg_target")},
+        "nutrients": nutrients,
+    }
+
+
+def calorie_catch_up(conn, goals: dict, today: Optional[date] = None) -> Optional[dict]:
+    """If the goal is to keep this calendar week's (Mon-Sun) daily average
+    at calorie_avg_target, what should the average be for the *remaining*
+    days, given what's already logged? Same remaining/days_remaining shape
+    as the pace rails, just applied to a week instead of a month. Returns
+    None if there's no calorie_avg_target set, nothing logged yet this
+    week, or the week is already over."""
+    today = today or config.snapshot_date()
+    target = goals.get("nutrition", {}).get("calorie_avg_target")
+    if target is None:
+        return None
+
+    week_start = today - timedelta(days=today.weekday())
+    week_end = week_start + timedelta(days=6)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, calories FROM nutrition_daily WHERE date >= ? AND date <= ?",
+        (week_start.isoformat(), today.isoformat()),
+    )
+    days_elapsed = (today - week_start).days + 1
+    days_remaining = (week_end - today).days
+    n_logged = len(rows)
+    if n_logged == 0 or days_remaining <= 0:
+        return None
+
+    logged_total = sum(r["calories"] for r in rows)
+    remaining_budget = target * 7 - logged_total
+
+    return {
+        "week_start": week_start.isoformat(),
+        "week_end": week_end.isoformat(),
+        "days_elapsed": days_elapsed,
+        "days_remaining": days_remaining,
+        "n_logged": n_logged,
+        # If a day this week wasn't logged at all, it's silently excluded
+        # from logged_total rather than assumed to be zero calories - the
+        # required-average number below is only as good as that gap is
+        # small, which fully_logged tells the caller honestly.
+        "fully_logged": n_logged == days_elapsed,
+        "logged_avg_so_far": round(logged_total / n_logged),
+        "required_avg_remaining": round(remaining_budget / days_remaining),
+        "target": target,
     }

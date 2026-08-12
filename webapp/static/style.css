@@ -403,6 +403,37 @@ a {
 .rail-val em { font-style: normal; font-size: 13.5px; color: var(--muted); }
 .rate { font-family: 'IBM Plex Mono', monospace; font-size: 11.5px; color: var(--muted); white-space: nowrap; }
 
+/* ---- Nutrient goal rows (Nutrition tab) - reuses .track/.fill's visual
+   language from the pace rails, just without the "expected" tick, since
+   there's no day-elapsed-in-period concept for a single nutrient goal. ---- */
+.nutrient-row { margin-bottom: 14px; }
+.nutrient-row:last-child { margin-bottom: 0; }
+.nutrient-row-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+  font-size: 13px;
+}
+.nutrient-row-head .label { color: var(--text); }
+.nutrient-val {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.nutrient-val.good { color: var(--ahead); }
+.nutrient-val.under, .nutrient-val.over { color: var(--behind); }
+.nutrient-track {
+  position: relative;
+  height: 4px;
+  background: var(--line);
+  border-radius: 2px;
+}
+.nutrient-fill { position: absolute; top: 0; left: 0; height: 4px; border-radius: 2px; }
+.nutrient-fill.good { background: var(--ahead); }
+.nutrient-fill.under, .nutrient-fill.over { background: var(--behind); }
+
 /* ---- Yesterday ---- */
 
 .yst .row {

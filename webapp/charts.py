@@ -8,6 +8,8 @@ stylesheet reliably enough to depend on here).
 """
 from __future__ import annotations
 
+from datetime import date as _date
+
 GROUND = "#0E1116"
 RAISE = "#1C222C"
 LINE = "#2E3644"
@@ -45,7 +47,6 @@ def _esc(s) -> str:
 
 
 def _human_date(iso_str: str) -> str:
-    from datetime import date as _date
     d = _date.fromisoformat(iso_str)
     return f"{d.strftime('%b')} {d.day}"
 
@@ -263,11 +264,16 @@ def heatmap_svg(cal: dict, width: int = 560) -> str:
     return "".join(parts)
 
 
-def weight_trend_svg(chart_series: list, checkpoint: dict, width: int = 900, height: int = 240) -> str:
-    """Raw readings as faint dots, EWMA as the emphasized line, a straight
-    trajectory to the checkpoint target, and (when available) a Theil-Sen
-    projection date range noted as text rather than drawn as false-precise
-    geometry. Y-axis never starts at zero - weight per spec §3."""
+def weight_trend_svg(chart_series: list, checkpoint: dict, projection: list = None,
+                      width: int = 900, height: int = 240) -> str:
+    """Raw readings as faint dots, EWMA as "Actual (logged)", and - when a
+    checkpoint and a real Theil-Sen rate exist - the projected path plus its
+    90% CI band as "Expected path" / "Best / worst case" (see
+    analytics.weight_projection_path: same rate already computed for the
+    single-arrival-date estimate, just drawn as a full straight-line path
+    instead of solved for one date). Y-axis never starts at zero - weight
+    per spec §3. Never draws a curve or shape the underlying rate doesn't
+    actually support."""
     if len(chart_series) < 2:
         return f"<svg width='{width}' height='{height}'></svg>"
 
@@ -275,46 +281,89 @@ def weight_trend_svg(chart_series: list, checkpoint: dict, width: int = 900, hei
     raw = [row["weight_lb"] for row in chart_series]
     ewma = [row["ewma"] for row in chart_series]
 
-    values = raw + ewma
+    values = list(raw) + list(ewma)
     if checkpoint:
-        values = values + [checkpoint["target"]]
+        values.append(checkpoint["target"])
+    if projection:
+        for p in projection:
+            values.extend([p["expected"], p["best"], p["worst"]])
     lo, hi = min(values), max(values)
     pad_val = (hi - lo) * 0.1 or 1
     lo, hi = lo - pad_val, hi + pad_val
 
-    pad_x, pad_top, pad_bottom = 8, 16, 22
+    legend_h = 22
+    pad_x, pad_top, pad_bottom = 8, 16 + legend_h, 22
     plot_w = width - 2 * pad_x
     plot_h = height - pad_top - pad_bottom
-    n = len(chart_series)
 
-    def xy(i, v):
-        x = pad_x + (i / (n - 1)) * plot_w
-        y = pad_top + plot_h - ((v - lo) / (hi - lo)) * plot_h
-        return x, y
+    start_d = _date.fromisoformat(dates[0])
+    end_d = _date.fromisoformat(projection[-1]["date"]) if projection else _date.fromisoformat(dates[-1])
+    total_days = max((end_d - start_d).days, 1)
+
+    def x_of(date_str: str) -> float:
+        d = _date.fromisoformat(date_str)
+        return pad_x + ((d - start_d).days / total_days) * plot_w
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - ((v - lo) / (hi - lo)) * plot_h
 
     parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
     parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
 
-    for i, v in enumerate(raw):
-        x, y = xy(i, v)
-        parts.append(f"<circle cx='{x:.1f}' cy='{y:.1f}' r='2' fill='{MUTED}' opacity='0.6'/>")
+    grid_step = max(round((hi - lo) / 4), 1)
+    g = (int(lo / grid_step) + 1) * grid_step
+    while g < hi:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_x}' y1='{gy:.1f}' x2='{pad_x + plot_w:.1f}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{pad_x + plot_w + 4:.1f}' y='{gy + 3:.1f}' {FONT} font-size='9.5' fill='{DIM}'>{g}</text>")
+        g += grid_step
 
-    ewma_points = [xy(i, v) for i, v in enumerate(ewma)]
+    # ---- legend ----
+    legend_items = [("Actual (logged)", NEUTRAL, False)]
+    if projection:
+        legend_items.append(("Expected path", WARN, False))
+        legend_items.append(("Best / worst case", MUTED, True))
+    lx = pad_x
+    for label, color, dashed in legend_items:
+        parts.append(f"<line x1='{lx}' y1='10' x2='{lx + 16}' y2='10' stroke='{color}' stroke-width='2'" + (" stroke-dasharray='3,2'" if dashed else "") + "/>")
+        parts.append(f"<text x='{lx + 21}' y='13' {LABEL_FONT} font-size='10' fill='{MUTED}'>{_esc(label)}</text>")
+        lx += 21 + len(label) * 6 + 18
+
+    for row in chart_series:
+        x, y = x_of(row["date"]), y_of(row["weight_lb"])
+        tip = _tip([_human_date(row["date"]), f"{row['weight_lb']} lb logged"])
+        parts.append(f"<circle data-tip='{tip}' cx='{x:.1f}' cy='{y:.1f}' r='2.5' fill='{MUTED}' opacity='0.6'/>")
+
+    ewma_points = [(x_of(row["date"]), y_of(row["ewma"])) for row in chart_series]
     path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in ewma_points)
     parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='2'/>")
 
+    if projection:
+        for key, color, dashed in (("worst", MUTED, True), ("best", MUTED, True), ("expected", WARN, False)):
+            pts = [(x_of(p["date"]), y_of(p[key])) for p in projection]
+            path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in pts)
+            dash = " stroke-dasharray='4,3'" if dashed else ""
+            parts.append(f"<path d='{path}' fill='none' stroke='{color}' stroke-width='1.5' opacity='0.85'{dash}/>")
+            for p in projection:
+                x, y = x_of(p["date"]), y_of(p[key])
+                tip = _tip([_human_date(p["date"]), f"{key}: {p[key]} lb"])
+                parts.append(f"<circle data-tip='{tip}' cx='{x:.1f}' cy='{y:.1f}' r='2' fill='{color}' opacity='0'/>")
+        last = projection[-1]
+        last_x, last_y, last_expected = x_of(last["date"]), y_of(last["expected"]), last["expected"]
+        parts.append(f"<text x='{last_x:.1f}' y='{last_y - 8:.1f}' {FONT} font-size='11' fill='{WARN}' text-anchor='end'>{last_expected}</text>")
+
     if checkpoint:
-        x0, y0 = xy(n - 1, ewma[-1])
-        target_x = width - pad_x
-        target_y = pad_top + plot_h - ((checkpoint["target"] - lo) / (hi - lo)) * plot_h
-        parts.append(f"<line x1='{x0:.1f}' y1='{y0:.1f}' x2='{target_x:.1f}' y2='{target_y:.1f}' stroke='{MUTED}' stroke-width='1' stroke-dasharray='3,3'/>")
-        parts.append(f"<text x='{target_x:.1f}' y='{target_y - 6:.1f}' {LABEL_FONT} font-size='9' fill='{MUTED}' text-anchor='end'>target {checkpoint['target']} · {_esc(checkpoint['date'])}</text>")
+        target_x = x_of(checkpoint["date"]) if projection else pad_x + plot_w
+        target_y = y_of(checkpoint["target"])
+        parts.append(f"<circle cx='{target_x:.1f}' cy='{target_y:.1f}' r='3' fill='none' stroke='{TEXT}' stroke-width='1.5'/>")
+        parts.append(f"<text x='{target_x:.1f}' y='{target_y - 8:.1f}' {LABEL_FONT} font-size='9' fill='{MUTED}' text-anchor='end'>target {checkpoint['target']} · {_esc(_human_date(checkpoint['date']))}</text>")
 
-    last_x, last_y = xy(n - 1, ewma[-1])
-    parts.append(f"<text x='{last_x:.1f}' y='{last_y - 10:.1f}' {FONT} font-size='12' fill='{TEXT}' text-anchor='end'>{ewma[-1]:.1f}</text>")
+    last_actual = ewma_points[-1]
+    parts.append(f"<text x='{last_actual[0]:.1f}' y='{last_actual[1] - 10:.1f}' {FONT} font-size='12' fill='{TEXT}' text-anchor='end'>{ewma[-1]:.1f}</text>")
 
-    parts.append(f"<text x='{pad_x}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}'>{_esc(dates[0])}</text>")
-    parts.append(f"<text x='{pad_x + plot_w:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}' text-anchor='end'>{_esc(dates[-1])}</text>")
+    parts.append(f"<text x='{pad_x}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}'>{_esc(_human_date(dates[0]))}</text>")
+    end_label_date = projection[-1]["date"] if projection else dates[-1]
+    parts.append(f"<text x='{pad_x + plot_w:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9' fill='{MUTED}' text-anchor='end'>{_esc(_human_date(end_label_date))}</text>")
 
     parts.append("</svg>")
     return "".join(parts)

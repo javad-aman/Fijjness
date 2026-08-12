@@ -44,10 +44,21 @@ DAILY_FIELDS = {
     "Carbohydrates (g)": "carbs_g",
     "Fat (g)": "fat_g",
     "Saturated Fat": "saturated_fat_g",
+    "Polyunsaturated Fat": "poly_fat_g",
+    "Monounsaturated Fat": "mono_fat_g",
+    "Trans Fat": "trans_fat_g",
+    "Cholesterol": "cholesterol_mg",
     "Sodium (mg)": "sodium_mg",
     "Sugar": "sugar_g",
     "Fiber": "fiber_g",
     "Potassium": "potassium_mg",
+    # MyFitnessPal reports these 4 as %DV per meal, not absolute amounts -
+    # summing %DV across meals to get a daily %DV total is valid (same
+    # reference denominator throughout), unlike the gram/mg fields above.
+    "Vitamin A": "vitamin_a_pct",
+    "Vitamin C": "vitamin_c_pct",
+    "Calcium": "calcium_pct",
+    "Iron": "iron_pct",
 }
 
 

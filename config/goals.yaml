@@ -15,3 +15,26 @@ weight:
 measurements:
   - biceps_flexed_in
   - waist_in
+nutrition:
+  calorie_avg_target: 1900   # user's own target daily average
+  # User's own explicit targets (take priority over any general reference):
+  protein_g_min: 150
+  sugar_g_max: 60             # MyFitnessPal's "Sugar" column is total sugar,
+                               # not added-sugar-only, so the FDA added-sugar
+                               # DV isn't the right reference here - this is
+                               # the user's own number for that column.
+  fat_g_min: 60
+  # Everything below is a researched reference, not a number the user gave -
+  # current FDA Nutrition Facts label Daily Values (based on a 2,000-calorie
+  # reference diet; https://en.wikipedia.org/wiki/Reference_Daily_Intake,
+  # citing FDA's 21 CFR 101.9), used only where the user didn't state their
+  # own target. Cholesterol/saturated fat/sodium are "stay under"; fiber/
+  # potassium are "stay over".
+  sodium_mg_max: 2300
+  fiber_g_min: 28
+  cholesterol_mg_max: 300
+  saturated_fat_g_max: 20
+  potassium_mg_min: 4700
+  # Vitamin A/C, calcium, iron come out of the MyFitnessPal export already
+  # expressed as %DV per the FDA label (not absolute mcg/mg), so 100% *is*
+  # the reference target - no separate number to look up for those.

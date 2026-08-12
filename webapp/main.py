@@ -357,7 +357,7 @@ def today(request: Request):
             })
         else:
             weight_module.update({
-                "svg": charts.weight_trend_svg(wt["chart_series"], wt["checkpoint"]),
+                "svg": charts.weight_trend_svg(wt["chart_series"], wt["checkpoint"], wt.get("projection")),
                 "trend_weight_lb": wt["trend_weight_lb"],
                 "rate_lb_per_week": wt["rate_lb_per_week"],
                 "checkpoint": wt["checkpoint"],
@@ -495,10 +495,22 @@ def insights(request: Request):
         conn.close()
 
 
+def _nutrient_window_display(conn, goals: dict, window: str) -> dict:
+    summary = analytics.nutrition_window_summary(conn, goals, window)
+    if summary["state"] != "full":
+        return summary
+    for n in summary["nutrients"]:
+        n["fill_pct"] = round(min(n["value"] / n["goal"], 1) * 100, 1) if n["goal"] else 0
+    return summary
+
+
 @app.get("/nutrition", response_class=HTMLResponse)
 def nutrition(request: Request):
     conn = db.get_connection()
     try:
+        windows = {w: _nutrient_window_display(conn, config.GOALS, w) for w in ("day", "week", "month")}
+        catch_up = analytics.calorie_catch_up(conn, config.GOALS)
+
         daily = analytics.nutrition_daily_series(conn)
         meals = analytics.meal_breakdown(conn)
         protein = analytics.protein_per_bodyweight(conn)
@@ -555,6 +567,8 @@ def nutrition(request: Request):
             "nutrition.html",
             {
                 "active_page": "nutrition",
+                "windows": windows,
+                "catch_up": catch_up,
                 "daily_module": daily_module,
                 "meals_module": meals_module,
                 "protein_module": protein_module,

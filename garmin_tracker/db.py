@@ -120,6 +120,10 @@ CREATE TABLE IF NOT EXISTS intraday_steps (
 -- Populated from a manually-exported MyFitnessPal CSV (see
 -- scripts/import_myfitnesspal.py) - MyFitnessPal has no public API, so this
 -- has no live sync counterpart and only updates when the user re-exports.
+-- New columns since this table's first release are added by
+-- _migrate_nutrition_daily() below, not here - CREATE TABLE IF NOT EXISTS
+-- is a no-op once the table already exists, so this definition is only
+-- what a genuinely fresh database gets on its very first init_db().
 CREATE TABLE IF NOT EXISTS nutrition_daily (
     date TEXT PRIMARY KEY,
     calories REAL,
@@ -130,7 +134,15 @@ CREATE TABLE IF NOT EXISTS nutrition_daily (
     sodium_mg REAL,
     sugar_g REAL,
     fiber_g REAL,
-    potassium_mg REAL
+    potassium_mg REAL,
+    cholesterol_mg REAL,
+    poly_fat_g REAL,
+    mono_fat_g REAL,
+    trans_fat_g REAL,
+    vitamin_a_pct REAL,
+    vitamin_c_pct REAL,
+    calcium_pct REAL,
+    iron_pct REAL
 );
 
 CREATE TABLE IF NOT EXISTS nutrition_meals (
@@ -286,9 +298,35 @@ def get_connection():
     return conn
 
 
+NUTRITION_DAILY_NEW_COLUMNS = {
+    "cholesterol_mg": "REAL",
+    "poly_fat_g": "REAL",
+    "mono_fat_g": "REAL",
+    "trans_fat_g": "REAL",
+    "vitamin_a_pct": "REAL",
+    "vitamin_c_pct": "REAL",
+    "calcium_pct": "REAL",
+    "iron_pct": "REAL",
+}
+
+
+def _migrate_nutrition_daily(conn) -> None:
+    """Adds any nutrition_daily columns introduced after this table's first
+    release to a database that already has the table (CREATE TABLE IF NOT
+    EXISTS in SCHEMA is a no-op there). Safe to call on every init_db() -
+    checks what's already present via PRAGMA table_info before adding
+    anything, so re-running never errors on a duplicate column."""
+    existing = {row["name"] for row in fetch_all_dicts(conn, "PRAGMA table_info(nutrition_daily)")}
+    for col, col_type in NUTRITION_DAILY_NEW_COLUMNS.items():
+        if col not in existing:
+            conn.execute(f"ALTER TABLE nutrition_daily ADD COLUMN {col} {col_type}")
+    conn.commit()
+
+
 def init_db(conn) -> None:
     conn.executescript(SCHEMA)
     conn.commit()
+    _migrate_nutrition_daily(conn)
 
 
 def upsert(conn, table: str, row: Mapping) -> None:
