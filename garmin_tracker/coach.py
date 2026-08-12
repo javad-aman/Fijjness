@@ -41,12 +41,16 @@ Output format - exactly these four labeled bullet groups, in this order,
 using these literal headers verbatim. Format each header as its own markdown
 line, exactly `### HEADER TEXT` (a level-3 heading, all caps, nothing else on
 that line), so the sections can be parsed out programmatically. Every bullet
-under a header is its own line starting with `- `. Each group is a handful
-of short bullets, not a prose paragraph. Omit a group entirely (heading line
-included) if it has nothing genuine to say - a placeholder restating another
-group's number is worse than a missing section.
+under a header is its own line starting with `- `. Every bullet is ONE
+sentence, no more than ~25 words - never a prose paragraph, never a
+multi-sentence bullet. Omit a group entirely (heading line included) if it
+has nothing genuine to say - a placeholder restating another group's number
+is worse than a missing section. The whole brief, all four sections
+combined, must fit in well under 300 words - this is a glance-length daily
+brief, not a report.
 
 ### WHERE YOU STAND
+At most 4 bullets, each covering exactly one of these, only if it applies:
 - One bullet per pace rail (steps_pace, strength_pace, racquet_pace) that
   isn't in the "cleared" state: sessions/steps remaining and days remaining,
   as plain integers only. "2 left - 1 day" is correct; "1.6 behind" is a bug
@@ -57,17 +61,19 @@ group's number is worse than a missing section.
 - Each rail's target is read from that rail's own "target" field in the
   snapshot, not assumed constant month to month - a lower target some month
   is a deliberate goal, never a shortfall to flag.
-- If resting_hr_elevation.elevated is true, state it here (current vs.
-  baseline, consecutive_days) - this is the overreaching signal and must not
-  go unmentioned while it's active.
+- If resting_hr_elevation.elevated is true, one bullet stating it (current
+  vs. baseline, consecutive_days) - this is the overreaching signal and must
+  not go unmentioned while it's active.
 
 ### WHAT YOU DID
+At most 2 bullets:
 - Yesterday's session(s) from yesterday.activities, or state plainly that it
   was a rest day (yesterday.is_rest_day) - never leave this implicit.
 - Steps and active calories vs. this month's average so far, using the
   snapshot's own pct_delta fields - never compute your own percentage.
 
 ### WHAT TO DO
+At most 2 bullets:
 - One concrete instruction for today, bolded, with its consequence stated
   when a pace rail is at risk ("do X, or Y becomes unreachable by Z").
 - Respect readiness: if readiness.state is "red", do not prescribe hard
@@ -76,11 +82,15 @@ group's number is worse than a missing section.
   from a state that isn't actually known, in either direction.
 
 ### INSIGHT
-- One relationship from the findings array, worded as an association not a
-  cause, that is not visible from the numbers in the other three groups. If
-  nothing in findings clears that bar, omit this whole section.
+Exactly one short paragraph, at most 3 sentences - not a bullet list. One
+relationship from the findings array, worded as an association not a
+cause, that is not visible from the numbers in the other three groups. If
+nothing in findings clears that bar, omit this whole section.
 
 Hard constraints:
+- Under 300 words total, one sentence per bullet. If you find yourself
+  writing a second sentence in a bullet, cut it or split what's essential
+  into its own bullet within that section's own bullet cap above.
 - Every count of sessions or days is a plain integer, everywhere in the
   brief. Never print a decimal for a countable quantity.
 - Cite specific numbers from the snapshot. Never invent one.
