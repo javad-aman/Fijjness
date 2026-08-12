@@ -38,3 +38,15 @@ nutrition:
   # Vitamin A/C, calcium, iron come out of the MyFitnessPal export already
   # expressed as %DV per the FDA label (not absolute mcg/mg), so 100% *is*
   # the reference target - no separate number to look up for those.
+  profile:
+    # Static personal context for the LLM nutrition advice
+    # (garmin_tracker/nutrition_coach.py) - current weight/activity are read
+    # from real logged data, not repeated here.
+    sex: male
+    height_in: 74               # 6'2"
+    goal: calorie deficit for weight loss, long-term sustainable pace
+    health_notes: >
+      User-reported mildly elevated LDL / borderline HDL cholesterol - not
+      tracked numerically in this app, considered qualitatively in advice.
+      This is dietary guidance, not medical treatment - defer to the
+      user's doctor for anything beyond food/lifestyle.

@@ -1644,6 +1644,24 @@ def weight_and_calories_series(conn, days: int = 60, today: Optional[date] = Non
     }
 
 
+# A day (or week/month average) doesn't need to be a strict pass/fail
+# against a nutrient goal - 15% short of a minimum or 15% over a maximum
+# reads as "near", not "under"/"over", so a single slightly-off day doesn't
+# paint the whole picture red. Only genuinely missing the target by more
+# than that reads as the harder under/over state.
+NUTRIENT_NEAR_BAND = 0.15
+
+
+def _nutrient_status(value: float, goal: float, direction: str) -> str:
+    if direction == "min":
+        if value >= goal:
+            return "good"
+        return "near" if value >= goal * (1 - NUTRIENT_NEAR_BAND) else "under"
+    if value <= goal:
+        return "good"
+    return "near" if value <= goal * (1 + NUTRIENT_NEAR_BAND) else "over"
+
+
 # (key, label, unit, goals.yaml key or None, direction "min"/"max"). The 4
 # %DV nutrients have no goals.yaml key - 100% *is* the reference by
 # definition of %DV, nothing to look up. See goals.yaml's nutrition section
@@ -1709,9 +1727,7 @@ def nutrition_window_summary(conn, goals: dict, window: str, today: Optional[dat
         total = sum(r[key] or 0 for r in rows)
         value = round(total / n, 1) if is_average else round(total, 1)
         goal = 100 if goal_key is None else nutrition_goals.get(goal_key)
-        status = None
-        if goal is not None:
-            status = "good" if (value >= goal if direction == "min" else value <= goal) else ("under" if direction == "min" else "over")
+        status = _nutrient_status(value, goal, direction) if goal is not None else None
         nutrients.append({
             "key": key, "label": label, "unit": unit, "value": value,
             "goal": goal, "direction": direction, "status": status,

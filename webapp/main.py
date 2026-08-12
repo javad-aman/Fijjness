@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from garmin_tracker import analytics, coach_email, config, db, stats_engine
+from garmin_tracker import analytics, coach_email, config, db, nutrition_coach, stats_engine
 from webapp import charts
 
 METRIC_LABELS = {
@@ -501,7 +501,19 @@ def _nutrient_window_display(conn, goals: dict, window: str) -> dict:
         return summary
     for n in summary["nutrients"]:
         n["fill_pct"] = round(min(n["value"] / n["goal"], 1) * 100, 1) if n["goal"] else 0
+    cal = summary["calories"]
+    if cal["target"]:
+        cal["status"] = analytics._nutrient_status(cal["value"], cal["target"], "max")
+        cal["fill_pct"] = round(min(cal["value"] / cal["target"], 1) * 100, 1)
     return summary
+
+
+def _advice_card(conn) -> dict:
+    row = nutrition_coach.latest_advice(conn)
+    if not row:
+        return {"status": "missing"}
+    groups = _parse_brief_sections(row["body_markdown"])
+    return {"status": "ok", "groups": groups, "date": row["date"]}
 
 
 @app.get("/nutrition", response_class=HTMLResponse)
@@ -510,6 +522,7 @@ def nutrition(request: Request):
     try:
         windows = {w: _nutrient_window_display(conn, config.GOALS, w) for w in ("day", "week", "month")}
         catch_up = analytics.calorie_catch_up(conn, config.GOALS)
+        advice_card = _advice_card(conn)
 
         daily = analytics.nutrition_daily_series(conn)
         meals = analytics.meal_breakdown(conn)
@@ -575,7 +588,18 @@ def nutrition(request: Request):
                 "weight_cal_module": weight_cal_module,
                 "comparison_cards": comparison_cards,
                 "train_rest_insufficient": train_rest_insufficient,
+                "advice_card": advice_card,
             },
         )
     finally:
         conn.close()
+
+
+@app.post("/nutrition/advice")
+def generate_nutrition_advice():
+    conn = db.get_connection()
+    try:
+        nutrition_coach.generate_nutrition_advice(conn, config.GOALS)
+    finally:
+        conn.close()
+    return RedirectResponse(url="/nutrition", status_code=303)

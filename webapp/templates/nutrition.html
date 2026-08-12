@@ -22,10 +22,10 @@
     <div class="nutrient-row">
       <div class="nutrient-row-head">
         <span class="label">Calories{{ ' /day avg' if w.is_average else '' }}</span>
-        <span class="nutrient-val">{{ "{:,}".format(w.calories.value) }}{% if w.calories.target %} <span class="compare">/ {{ "{:,}".format(w.calories.target) }} target</span>{% endif %}</span>
+        <span class="nutrient-val {{ w.calories.status or '' }}">{{ "{:,}".format(w.calories.value) }}{% if w.calories.target %} <span class="compare">/ {{ "{:,}".format(w.calories.target) }} target</span>{% endif %}</span>
       </div>
       {% if w.calories.target %}
-      <div class="nutrient-track"><div class="nutrient-fill {{ 'good' if w.calories.value <= w.calories.target else 'under' }}" style="width: {{ [w.calories.value / w.calories.target * 100, 100] | min }}%"></div></div>
+      <div class="nutrient-track"><div class="nutrient-fill {{ w.calories.status }}" style="width: {{ w.calories.fill_pct }}%"></div></div>
       {% endif %}
     </div>
 
@@ -51,6 +51,36 @@
     {% endif %}
   </div>
   {% endfor %}
+
+  <!-- DIETITIAN ADVICE -->
+  <div class="card brief c12" style="min-height: auto;">
+    <div class="row" style="align-items: center; margin-bottom: 4px;">
+      <div class="eyebrow" style="margin-bottom: 0;">Coach · dietitian advice</div>
+      <form action="/nutrition/advice" method="post">
+        <button type="submit" class="btn">{{ 'Regenerate' if advice_card.status == 'ok' else 'Generate advice' }}</button>
+      </form>
+    </div>
+    {% if advice_card.status == 'ok' %}
+    <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 14px;">
+      {% for group in advice_card.groups %}
+      <div class="bgroup">
+        <div class="blabel">{{ group.label }}</div>
+        <ul>
+          {% for bullet in group.bullets %}
+          <li>{{ bullet | safe }}</li>
+          {% endfor %}
+        </ul>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="stamp">generated {{ advice_card.date }} · not medical advice - food and lifestyle guidance only</div>
+    {% else %}
+    <p class="compare" style="margin: 10px 0 0;">
+      No advice generated yet - click "Generate advice" for a read on your logged nutrients,
+      framed like an experienced dietitian would (long-term trends, not day-to-day pass/fail).
+    </p>
+    {% endif %}
+  </div>
 
   {% if daily_module.state == 'insufficient' %}
   <div class="card c8">

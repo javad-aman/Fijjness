@@ -423,6 +423,7 @@ a {
   white-space: nowrap;
 }
 .nutrient-val.good { color: var(--ahead); }
+.nutrient-val.near { color: var(--warn); }
 .nutrient-val.under, .nutrient-val.over { color: var(--behind); }
 .nutrient-track {
   position: relative;
@@ -432,6 +433,7 @@ a {
 }
 .nutrient-fill { position: absolute; top: 0; left: 0; height: 4px; border-radius: 2px; }
 .nutrient-fill.good { background: var(--ahead); }
+.nutrient-fill.near { background: var(--warn); }
 .nutrient-fill.under, .nutrient-fill.over { background: var(--behind); }
 
 /* ---- Yesterday ---- */

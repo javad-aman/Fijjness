@@ -154,6 +154,14 @@ CREATE TABLE IF NOT EXISTS nutrition_meals (
     fat_g REAL,
     PRIMARY KEY (date, meal)
 );
+
+-- LLM dietitian advice (see garmin_tracker/nutrition_coach.py) - generated
+-- on demand via the /nutrition/advice route, never on a page GET.
+CREATE TABLE IF NOT EXISTS nutrition_advice (
+    date TEXT PRIMARY KEY,
+    body_markdown TEXT,
+    context_json TEXT
+);
 """
 
 
