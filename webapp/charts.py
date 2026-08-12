@@ -696,3 +696,221 @@ def weight_raw_points_svg(points: list, width: int = 420, height: int = 130) -> 
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+# ---- Nutrition tab --------------------------------------------------------
+
+def nutrition_daily_bars_svg(data: dict, width: int = 900, height: int = 220) -> str:
+    """Daily calories from the MyFitnessPal import, plain bars (no goal
+    line - no calorie goal is defined anywhere in this project) with an
+    average reference line, tooltip per bar."""
+    days = data["days"]
+    n = len(days)
+    if n == 0:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    values = [d["calories"] for d in days]
+    avg = sum(values) / len(values)
+    max_val = max(values) * 1.1 or 1
+
+    pad_left, pad_right, pad_bottom, pad_top = 44, 12, 26, 14
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_bottom - pad_top
+    gap = plot_w / n
+    bar_w = gap * 0.6
+    y0 = pad_top + plot_h
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - (v / max_val) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round(max_val / 4 / 250) * 250, 250)
+    g = grid_step
+    while g < max_val:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{pad_left - 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}' text-anchor='end'>{g:,.0f}</text>")
+        g += grid_step
+
+    for i, d in enumerate(days):
+        v = d["calories"]
+        x = pad_left + i * gap + (gap - bar_w) / 2
+        bar_h = max(1.0, (v / max_val) * plot_h)
+        tip = _tip([_human_date(d["date"]), f"{v:,.0f} cal", f"{d['protein_g']:.0f}g protein · {d['carbs_g']:.0f}g carbs · {d['fat_g']:.0f}g fat"])
+        parts.append(f"<rect data-tip='{tip}' x='{x:.1f}' y='{y0 - bar_h:.1f}' width='{bar_w:.1f}' height='{bar_h:.1f}' rx='2' fill='{NEUTRAL}' opacity='0.85'/>")
+
+    avg_y = y_of(avg)
+    parts.append(f"<line x1='{pad_left}' y1='{avg_y:.1f}' x2='{width - pad_right}' y2='{avg_y:.1f}' stroke='{TEXT}' stroke-width='1' stroke-dasharray='3,3' opacity='0.6'/>")
+    parts.append(f"<text x='{pad_left + 4}' y='{avg_y - 6:.1f}' {FONT} font-size='11' fill='{MUTED}'>avg {avg:,.0f}</text>")
+
+    for i, anchor in ((0, "start"), (n - 1, "end")):
+        x = pad_left + i * gap + bar_w / 2
+        parts.append(f"<text x='{x:.1f}' y='{height - 8}' {LABEL_FONT} font-size='10' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(days[i]['date']))}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def meal_breakdown_svg(data: dict, width: int = 520, height: int = 90) -> str:
+    """One 100%-stacked horizontal bar - Breakfast/Lunch/Dinner/Snacks share
+    of total calories, direct-labeled (4 segments, under the no-legend-
+    under-5 threshold)."""
+    meals = data["meals"]
+    total = data["total"]
+    if not meals or not total:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    colors = {"Breakfast": NEUTRAL, "Lunch": WARN, "Dinner": "#2FB8C6", "Snacks": "#8B7BB8"}
+    bar_h = 28
+    y = height - bar_h - 30
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    x = 0
+    for m in meals:
+        seg_w = m["pct"] / 100 * width
+        tip = _tip([m["meal"], f"{m['calories']:,} cal · {m['pct']}%"])
+        meal_color = colors.get(m["meal"], MUTED)
+        parts.append(f"<rect data-tip='{tip}' x='{x:.1f}' y='{y}' width='{max(seg_w - 2, 0):.1f}' height='{bar_h}' rx='2' fill='{meal_color}' opacity='0.9'/>")
+        if seg_w > 46:
+            parts.append(f"<text x='{x + seg_w/2:.1f}' y='{y + bar_h/2 + 4:.1f}' {FONT} font-size='11' font-weight='600' fill='{GROUND}' text-anchor='middle'>{m['pct']}%</text>")
+        label_y = y + bar_h + 16
+        parts.append(f"<text x='{x + 4:.1f}' y='{label_y}' {LABEL_FONT} font-size='10.5' fill='{MUTED}'>{_esc(m['meal'])}</text>")
+        x += seg_w
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def protein_per_bodyweight_svg(data: dict, width: int = 520, height: int = 130) -> str:
+    """Daily protein-per-bodyweight ratio, dots + a connecting line - a
+    low-n metric, so kept visually simple like weight_raw_points_svg."""
+    points = data["points"]
+    if not points:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    values = [p["ratio"] for p in points]
+    lo, hi = min(values), max(values)
+    pad_val = (hi - lo) * 0.15 or 0.05
+    lo, hi = max(lo - pad_val, 0), hi + pad_val
+
+    pad_left, pad_right, pad_top, pad_bottom = 8, 40, 16, 22
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+    n = len(points)
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - ((v - lo) / (hi - lo)) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' style='width:100%;height:auto;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max((hi - lo) / 3, 0.1)
+    g = lo + grid_step
+    while g < hi:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{width - pad_right + 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}'>{g:.2f}</text>")
+        g += grid_step
+
+    line_points = []
+    for i, p in enumerate(points):
+        x = pad_left + (i / max(n - 1, 1)) * plot_w
+        y = y_of(p["ratio"])
+        line_points.append((x, y))
+
+    if len(line_points) >= 2:
+        path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in line_points)
+        parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='1.5' opacity='0.8'/>")
+
+    for i, (p, (x, y)) in enumerate(zip(points, line_points)):
+        tip = _tip([_human_date(p["date"]), f"{p['ratio']} g/lb"])
+        parts.append(f"<circle data-tip='{tip}' cx='{x:.1f}' cy='{y:.1f}' r='3.5' fill='{MUTED}'/>")
+        if i == 0 or i == n - 1:
+            anchor = "start" if i == 0 else "end"
+            parts.append(f"<text x='{x:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9.5' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(p['date']))}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)
+
+
+def weight_and_calories_dual_svg(data: dict, width: int = 900, height: int = 260) -> str:
+    """Two aligned mini-panels sharing an x-axis: weight trend on top,
+    daily calories below - a visual-only comparison, no computed
+    relationship drawn between the two (see weight_and_calories_series'
+    own docstring)."""
+    calorie_days = data["calories"]
+    weight_days = data["weight"]
+    if not calorie_days:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    n = len(calorie_days)
+    date_index = {d["date"]: i for i, d in enumerate(calorie_days)}
+    pad_left, pad_right = 44, 12
+    plot_w = width - pad_left - pad_right
+    gap = plot_w / n
+
+    weight_h, cal_h, gap_h = 110, 90, 30
+    top_pad, bottom_pad = 14, 24
+
+    def x_of(i: float) -> float:
+        return pad_left + i * gap + gap / 2
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    # ---- weight panel (top) ----
+    w_top = top_pad
+    w_plot_h = weight_h
+    weight_pts = [(date_index[d["date"]], d["weight_lb"]) for d in weight_days if d["date"] in date_index]
+    if weight_pts:
+        w_values = [v for _, v in weight_pts]
+        w_lo, w_hi = min(w_values), max(w_values)
+        w_pad = (w_hi - w_lo) * 0.2 or 1
+        w_lo, w_hi = w_lo - w_pad, w_hi + w_pad
+
+        def wy_of(v: float) -> float:
+            return w_top + w_plot_h - ((v - w_lo) / (w_hi - w_lo)) * w_plot_h
+
+        parts.append(f"<text x='{pad_left}' y='{w_top - 2}' {LABEL_FONT} font-size='10' fill='{DIM}'>weight (lb)</text>")
+        w_grid_step = max((w_hi - w_lo) / 3, 0.5)
+        wg = w_lo + w_grid_step
+        while wg < w_hi:
+            wgy = wy_of(wg)
+            parts.append(f"<line x1='{pad_left}' y1='{wgy:.1f}' x2='{width - pad_right}' y2='{wgy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+            parts.append(f"<text x='{pad_left - 8}' y='{wgy + 4:.1f}' {FONT} font-size='10' fill='{DIM}' text-anchor='end'>{wg:.0f}</text>")
+            wg += w_grid_step
+        line_pts = [(x_of(i), wy_of(v)) for i, v in weight_pts]
+        if len(line_pts) >= 2:
+            path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in line_pts)
+            parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='1.5' opacity='0.85'/>")
+        for (i, v), (x, y) in zip(weight_pts, line_pts):
+            tip = _tip([_human_date(calorie_days[i]["date"]), f"{v} lb"])
+            parts.append(f"<circle data-tip='{tip}' cx='{x:.1f}' cy='{y:.1f}' r='3' fill='{MUTED}'/>")
+
+    # ---- calories panel (bottom) ----
+    c_top = w_top + w_plot_h + gap_h
+    c_values = [d["calories"] for d in calorie_days]
+    c_max = max(c_values) * 1.1 or 1
+
+    def cy_of(v: float) -> float:
+        return c_top + cal_h - (v / c_max) * cal_h
+
+    parts.append(f"<text x='{pad_left}' y='{c_top - 2}' {LABEL_FONT} font-size='10' fill='{DIM}'>calories</text>")
+    for i, d in enumerate(calorie_days):
+        v = d["calories"]
+        x = pad_left + i * gap + gap * 0.2
+        bw = gap * 0.6
+        bar_h = max(1.0, (v / c_max) * cal_h)
+        tip = _tip([_human_date(d["date"]), f"{v:,.0f} cal"])
+        parts.append(f"<rect data-tip='{tip}' x='{x:.1f}' y='{c_top + cal_h - bar_h:.1f}' width='{bw:.1f}' height='{bar_h:.1f}' rx='1.5' fill='{WARN}' opacity='0.8'/>")
+
+    for i, anchor in ((0, "start"), (n - 1, "end")):
+        x = x_of(i)
+        parts.append(f"<text x='{x:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9.5' fill='{DIM}' text-anchor='{anchor}'>{_esc(_human_date(calorie_days[i]['date']))}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)

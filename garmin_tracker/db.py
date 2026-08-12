@@ -116,6 +116,32 @@ CREATE TABLE IF NOT EXISTS intraday_steps (
     steps INTEGER,
     PRIMARY KEY (date, hour)
 );
+
+-- Populated from a manually-exported MyFitnessPal CSV (see
+-- scripts/import_myfitnesspal.py) - MyFitnessPal has no public API, so this
+-- has no live sync counterpart and only updates when the user re-exports.
+CREATE TABLE IF NOT EXISTS nutrition_daily (
+    date TEXT PRIMARY KEY,
+    calories REAL,
+    protein_g REAL,
+    carbs_g REAL,
+    fat_g REAL,
+    saturated_fat_g REAL,
+    sodium_mg REAL,
+    sugar_g REAL,
+    fiber_g REAL,
+    potassium_mg REAL
+);
+
+CREATE TABLE IF NOT EXISTS nutrition_meals (
+    date TEXT,
+    meal TEXT,
+    calories REAL,
+    protein_g REAL,
+    carbs_g REAL,
+    fat_g REAL,
+    PRIMARY KEY (date, meal)
+);
 """
 
 

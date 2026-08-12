@@ -1,6 +1,8 @@
 .env
 .garmin_tokens/
 data/
+# MyFitnessPal exports - personal health data, never committed
+File-Export-*.zip
 __pycache__/
 *.pyc
 venv/

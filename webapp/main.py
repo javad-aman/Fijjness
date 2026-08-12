@@ -493,3 +493,75 @@ def insights(request: Request):
         )
     finally:
         conn.close()
+
+
+@app.get("/nutrition", response_class=HTMLResponse)
+def nutrition(request: Request):
+    conn = db.get_connection()
+    try:
+        daily = analytics.nutrition_daily_series(conn)
+        meals = analytics.meal_breakdown(conn)
+        protein = analytics.protein_per_bodyweight(conn)
+        weight_cal = analytics.weight_and_calories_series(conn)
+        train_rest = analytics.nutrition_training_vs_rest(conn)
+
+        daily_module = {"state": daily["state"]}
+        if daily["state"] == "full":
+            daily_module.update({
+                "svg": charts.nutrition_daily_bars_svg(daily),
+                "subtitle": f"Daily calories · {charts._human_date(daily['range_start'])} – "
+                            f"{charts._human_date(daily['range_end'])} · {daily['n_days']} days logged",
+                "avg_calories": daily["avg_calories"],
+                "avg_protein": daily["avg_protein"],
+                "avg_carbs": daily["avg_carbs"],
+                "avg_fat": daily["avg_fat"],
+                "avg_sodium": daily["avg_sodium"],
+                "best_day_calories": daily["best_day_calories"],
+                "lowest_day_calories": daily["lowest_day_calories"],
+            })
+
+        meals_module = {"state": meals["state"]}
+        if meals["state"] == "full":
+            meals_module["svg"] = charts.meal_breakdown_svg(meals)
+            meals_module["meals"] = meals["meals"]
+
+        protein_module = {"state": protein["state"]}
+        if protein["state"] == "full":
+            protein_module.update({
+                "svg": charts.protein_per_bodyweight_svg(protein),
+                "current": protein["current"],
+                "avg": protein["avg"],
+            })
+
+        weight_cal_module = {"state": weight_cal["state"]}
+        if weight_cal["state"] == "full":
+            weight_cal_module["svg"] = charts.weight_and_calories_dual_svg(weight_cal)
+
+        comparison_cards = []
+        if train_rest["state"] == "full":
+            for metric, c in train_rest["comparisons"].items():
+                if c["status"] != "surfaced":
+                    continue
+                comparison_cards.append({
+                    "description": f"{c['label']} tends to differ between training days and rest days "
+                                    f"({c['training_avg']:,.0f} vs {c['rest_avg']:,.0f} average).",
+                    "svg": charts.effect_ci_svg(c["effect_size"], c["ci_low"], c["ci_high"]),
+                    "n_effective": c["n_effective"],
+                })
+        train_rest_insufficient = train_rest["state"] != "full" or not comparison_cards
+
+        return templates.TemplateResponse(
+            request,
+            "nutrition.html",
+            {
+                "active_page": "nutrition",
+                "daily_module": daily_module,
+                "meals_module": meals_module,
+                "protein_module": protein_module,
+                "weight_cal_module": weight_cal_module,
+                "comparison_cards": comparison_cards,
+                "train_rest_insufficient": train_rest_insufficient,
+            },
+        )
+    finally:
+        conn.close()

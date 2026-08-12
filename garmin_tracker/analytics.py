@@ -10,6 +10,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta, timezone
 from typing import Optional
 
+import numpy as np
 from scipy.stats import theilslopes
 
 from garmin_tracker import config, db
@@ -1423,3 +1424,167 @@ def recovery_summary(readiness: dict, rhr_elevation: dict, acwr: dict, yesterday
         verdict = "No recovery flags today - resting HR and training load are both within normal range."
 
     return {"bullets": bullets, "verdict": verdict}
+
+
+# ---- Nutrition tab (from a manually-imported MyFitnessPal export - see
+# scripts/import_myfitnesspal.py) - MyFitnessPal has no public API, so this
+# data has no live sync counterpart and only updates when the user
+# re-exports and re-runs the importer. Kept off the coach's single-snapshot
+# contract (build_snapshot) on purpose - this is a standalone descriptive
+# page, not part of the daily brief. -----------------------------------
+
+MEAL_ORDER = ["Breakfast", "Lunch", "Dinner", "Snacks"]
+
+
+def nutrition_daily_series(conn, days: int = 60, today: Optional[date] = None) -> dict:
+    """Daily nutrition totals for the charting window. state: insufficient
+    if nothing has been imported yet."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days - 1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT * FROM nutrition_daily WHERE date >= ? AND date <= ? ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    if not rows:
+        return {"state": "insufficient"}
+
+    values = [r["calories"] for r in rows]
+    return {
+        "state": "full",
+        "days": rows,
+        "n_days": len(rows),
+        "range_start": rows[0]["date"],
+        "range_end": rows[-1]["date"],
+        "avg_calories": round(sum(values) / len(values)),
+        "avg_protein": round(sum(r["protein_g"] for r in rows) / len(rows)),
+        "avg_carbs": round(sum(r["carbs_g"] for r in rows) / len(rows)),
+        "avg_fat": round(sum(r["fat_g"] for r in rows) / len(rows)),
+        "avg_sodium": round(sum(r["sodium_mg"] for r in rows) / len(rows)),
+        "best_day_calories": round(max(values)),
+        "lowest_day_calories": round(min(values)),
+    }
+
+
+def meal_breakdown(conn, days: int = 60, today: Optional[date] = None) -> dict:
+    """% of calories by meal (Breakfast/Lunch/Dinner/Snacks) across the
+    window - where the calories actually come from in the day."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days - 1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT meal, SUM(calories) as total FROM nutrition_meals WHERE date >= ? AND date <= ? GROUP BY meal",
+        (start.isoformat(), today.isoformat()),
+    )
+    if not rows:
+        return {"state": "insufficient"}
+
+    totals = {r["meal"]: round(r["total"]) for r in rows}
+    grand_total = sum(totals.values())
+    meals = [
+        {"meal": m, "calories": totals[m], "pct": round(totals[m] / grand_total * 100) if grand_total else 0}
+        for m in MEAL_ORDER if m in totals
+    ]
+    return {"state": "full", "meals": meals, "total": grand_total}
+
+
+def protein_per_bodyweight(conn, days: int = 60, today: Optional[date] = None) -> dict:
+    """Daily protein_g / weight_lb (nearest prior-day weight if that exact
+    day has none) - a standard, real fitness metric. Shown as the athlete's
+    own trend only; no external target line unless goals.yaml ever defines
+    one, since none does today."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days - 1)
+    nutrition_rows = db.fetch_all_dicts(
+        conn, "SELECT date, protein_g FROM nutrition_daily WHERE date >= ? AND date <= ? ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    if not nutrition_rows:
+        return {"state": "insufficient"}
+
+    weight_rows = db.fetch_all_dicts(
+        conn, "SELECT date, weight_lb FROM daily_metrics WHERE date >= ? AND date <= ? AND weight_lb IS NOT NULL ORDER BY date",
+        ((start - timedelta(days=30)).isoformat(), today.isoformat()),
+    )
+    weight_by_date = {r["date"]: r["weight_lb"] for r in weight_rows}
+    sorted_weight_dates = sorted(weight_by_date)
+
+    points = []
+    for r in nutrition_rows:
+        d = r["date"]
+        w = weight_by_date.get(d)
+        if w is None:
+            prior = [wd for wd in sorted_weight_dates if wd <= d]
+            w = weight_by_date[prior[-1]] if prior else None
+        if w:
+            points.append({"date": d, "ratio": round(r["protein_g"] / w, 2)})
+
+    if not points:
+        return {"state": "insufficient"}
+    return {
+        "state": "full",
+        "points": points,
+        "current": points[-1]["ratio"],
+        "avg": round(sum(p["ratio"] for p in points) / len(points), 2),
+    }
+
+
+def nutrition_training_vs_rest(conn, today: Optional[date] = None) -> dict:
+    """Reuses stats_engine's already-validated Hedges' g + bootstrap
+    comparison (same n>=10-per-group gate the Insights page holds itself
+    to) to check whether calorie/protein intake differs on training days
+    vs. rest days. Honestly reports insufficient if there isn't enough
+    nutrition history yet for either group to clear that bar - expected
+    with only a few weeks of MyFitnessPal history."""
+    from garmin_tracker import stats_engine
+
+    rows = db.fetch_all_dicts(conn, "SELECT date, calories, protein_g FROM nutrition_daily ORDER BY date")
+    if not rows:
+        return {"state": "insufficient"}
+
+    dates = [r["date"] for r in rows]
+    start, end = min(dates), max(dates)
+    activity_dates = {
+        r["date"] for r in db.fetch_all_dicts(
+            conn, "SELECT DISTINCT date FROM activities WHERE date >= ? AND date <= ?", (start, end)
+        )
+    }
+
+    comparisons = {}
+    for metric, label in (("calories", "Calories"), ("protein_g", "Protein")):
+        training = np.array([r[metric] for r in rows if r["date"] in activity_dates], dtype=float)
+        rest = np.array([r[metric] for r in rows if r["date"] not in activity_dates], dtype=float)
+        result = stats_engine.compare_training_vs_rest(training, rest)
+        result["label"] = label
+        result["training_avg"] = round(float(training.mean()), 1) if len(training) else None
+        result["rest_avg"] = round(float(rest.mean()), 1) if len(rest) else None
+        comparisons[metric] = result
+
+    return {"state": "full", "comparisons": comparisons}
+
+
+def weight_and_calories_series(conn, days: int = 60, today: Optional[date] = None) -> dict:
+    """Trend weight + daily calories over the overlapping window, for a
+    side-by-side visual only - no correlation coefficient, no causal
+    language. Matches this project's own rule (see stats_engine.py):
+    brute-force correlation from a single subject's few weeks of data is
+    worse than nothing - the athlete's own eye does the comparing here."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days - 1)
+
+    nutrition_rows = db.fetch_all_dicts(
+        conn, "SELECT date, calories FROM nutrition_daily WHERE date >= ? AND date <= ? ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    weight_rows = db.fetch_all_dicts(
+        conn, "SELECT date, weight_lb FROM daily_metrics WHERE date >= ? AND date <= ? AND weight_lb IS NOT NULL ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    if not nutrition_rows or not weight_rows:
+        return {"state": "insufficient"}
+
+    return {
+        "state": "full",
+        "calories": nutrition_rows,
+        "weight": weight_rows,
+        "range_start": min(nutrition_rows[0]["date"], weight_rows[0]["date"]),
+        "range_end": today.isoformat(),
+    }
