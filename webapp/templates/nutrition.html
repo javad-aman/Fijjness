@@ -57,7 +57,7 @@
     <div class="row" style="align-items: center; margin-bottom: 4px;">
       <div class="eyebrow" style="margin-bottom: 0;">Coach · dietitian advice</div>
       <form action="/nutrition/advice" method="post">
-        <button type="submit" class="btn">{{ 'Regenerate' if advice_card.status == 'ok' else 'Generate advice' }}</button>
+        <button type="submit" class="btn">Regenerate now</button>
       </form>
     </div>
     {% if advice_card.status == 'ok' %}
@@ -73,11 +73,11 @@
       </div>
       {% endfor %}
     </div>
-    <div class="stamp">generated {{ advice_card.date }} · not medical advice - food and lifestyle guidance only</div>
+    <div class="stamp">generated {{ advice_card.date }} - refreshes automatically on every MyFitnessPal import - not medical advice, food and lifestyle guidance only</div>
     {% else %}
     <p class="compare" style="margin: 10px 0 0;">
-      No advice generated yet - click "Generate advice" for a read on your logged nutrients,
-      framed like an experienced dietitian would (long-term trends, not day-to-day pass/fail).
+      No advice yet - this refreshes automatically every time fresh nutrition data is imported
+      (scripts/import_myfitnesspal.py), or click "Regenerate now" for one immediately.
     </p>
     {% endif %}
   </div>

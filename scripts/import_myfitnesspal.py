@@ -29,7 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from garmin_tracker import db
+from garmin_tracker import config, db, nutrition_coach
 
 MEAL_FIELDS = {
     "Calories": "calories",
@@ -146,6 +146,11 @@ def main():
                      "there is no live sync for this, MyFitnessPal has no public API."
     )
     parser.add_argument("zip_path", help="Path to the MyFitnessPal export zip file.")
+    parser.add_argument(
+        "--skip-advice", action="store_true",
+        help="Don't regenerate the dietitian advice after importing (it costs an API call; "
+             "useful for local testing). By default a successful import always refreshes it.",
+    )
     args = parser.parse_args()
 
     with zipfile.ZipFile(args.zip_path) as zf, db.connect() as conn:
@@ -154,6 +159,18 @@ def main():
 
         n_weight = import_weight_fallback(zf, conn)
         print(f"weight fallback: filled {n_weight} date(s) with no existing Garmin reading")
+
+        if n_days > 0 and not args.skip_advice:
+            try:
+                nutrition_coach.generate_nutrition_advice(conn, config.GOALS)
+                print("dietitian advice: regenerated")
+            except Exception as exc:
+                # New nutrition data is already committed above - a flaky
+                # Claude call (rate limit, truncation, etc.) shouldn't make
+                # the whole import look like it failed. The old advice just
+                # stays in place until the next successful import or a
+                # manual "Regenerate" click on the page.
+                print(f"dietitian advice: generation failed, kept previous advice ({exc})")
 
 
 if __name__ == "__main__":
