@@ -523,6 +523,7 @@ def nutrition(request: Request):
         windows = {w: _nutrient_window_display(conn, config.GOALS, w) for w in ("day", "week", "month")}
         catch_up = analytics.calorie_catch_up(conn, config.GOALS)
         advice_card = _advice_card(conn)
+        expected_weight = analytics.expected_weight_from_calories(conn, config.GOALS)
 
         daily = analytics.nutrition_daily_series(conn)
         meals = analytics.meal_breakdown(conn)
@@ -589,6 +590,7 @@ def nutrition(request: Request):
                 "comparison_cards": comparison_cards,
                 "train_rest_insufficient": train_rest_insufficient,
                 "advice_card": advice_card,
+                "expected_weight": expected_weight,
             },
         )
     finally:

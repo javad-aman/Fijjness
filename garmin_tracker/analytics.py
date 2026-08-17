@@ -1789,3 +1789,73 @@ def calorie_catch_up(conn, goals: dict, today: Optional[date] = None) -> Optiona
         "required_avg_remaining": round(remaining_budget / days_remaining),
         "target": target,
     }
+
+
+def expected_weight_from_calories(conn, goals: dict, today: Optional[date] = None) -> dict:
+    """Energy-balance weight estimate - a different thing from
+    trend_weight()'s pure logged-weight trend (which never looks at
+    calories). Anchors on trend_weight()'s own EWMA - the trusted smoothed
+    number shown everywhere else on this dashboard - then walks forward
+    day by day accumulating (calories_in - calories_out) / 3500 lb for
+    every day with BOTH a real nutrition_daily.calories and a real
+    daily_metrics.total_calories. total_calories is Garmin's own
+    totalKilocalories (BMR + activity already combined - confirmed against
+    real data), never added to active_calories separately, which would
+    double-count the workout portion. A day missing either value is
+    skipped, not zero-filled - "disregard nulls" per the ask. The 3,500
+    kcal/lb rule is a standard approximation (water weight, input error on
+    both sides), so this is an estimate, not a forecast - the caller
+    should label it that way, not just this docstring."""
+    today = today or config.snapshot_date()
+    trend = trend_weight(conn, goals, today)
+    anchor_weight = trend.get("trend_weight_lb")
+    if anchor_weight is None:
+        return {"state": "insufficient"}
+
+    anchor_rows = db.fetch_all_dicts(
+        conn, "SELECT date FROM daily_metrics WHERE weight_lb IS NOT NULL AND date <= ? ORDER BY date DESC LIMIT 1",
+        (today.isoformat(),),
+    )
+    anchor_date = anchor_rows[0]["date"]
+
+    rows = db.fetch_all_dicts(
+        conn,
+        "SELECT nd.date, nd.calories as calories_in, dm.total_calories as calories_out "
+        "FROM nutrition_daily nd JOIN daily_metrics dm ON dm.date = nd.date "
+        "WHERE nd.date > ? AND nd.date <= ? AND nd.calories IS NOT NULL AND dm.total_calories IS NOT NULL "
+        "ORDER BY nd.date",
+        (anchor_date, today.isoformat()),
+    )
+
+    result = {
+        "state": "full" if rows else "insufficient",
+        "anchor_date": anchor_date,
+        "anchor_weight_lb": anchor_weight,
+        "days_in_window": (today - _parse_date(anchor_date)).days,
+        "days_with_both_values": len(rows),
+    }
+    if not rows:
+        return result
+
+    accumulated_lb = sum(r["calories_in"] - r["calories_out"] for r in rows) / 3500
+    expected_weight_today = round(anchor_weight + accumulated_lb, 1)
+    result["expected_weight_today_lb"] = expected_weight_today
+
+    # "If this week keeps going like it has been" - need at least 3
+    # qualifying days in the trailing week to say anything (same
+    # don't-overreact-to-one-day instinct as the nutrient near-band).
+    week_lookback_start = (today - timedelta(days=6)).isoformat()
+    week_rows = [r for r in rows if r["date"] >= week_lookback_start]
+    if len(week_rows) >= 3:
+        avg_net = sum(r["calories_in"] - r["calories_out"] for r in week_rows) / len(week_rows)
+        avg_daily_net_lb = avg_net / 3500
+        iso_week_start = today - timedelta(days=today.weekday())
+        week_end = iso_week_start + timedelta(days=6)
+        days_remaining = (week_end - today).days
+        result.update({
+            "week_avg_daily_net_lb": round(avg_daily_net_lb, 3),
+            "days_with_both_values_this_week": len(week_rows),
+            "week_end_date": week_end.isoformat(),
+            "projected_end_of_week_lb": round(expected_weight_today + avg_daily_net_lb * days_remaining, 1),
+        })
+    return result
