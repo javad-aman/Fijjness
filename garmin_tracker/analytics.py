@@ -1859,3 +1859,137 @@ def expected_weight_from_calories(conn, goals: dict, today: Optional[date] = Non
             "projected_end_of_week_lb": round(expected_weight_today + avg_daily_net_lb * days_remaining, 1),
         })
     return result
+
+
+def vo2max_trend(conn, days: int = 180, today: Optional[date] = None) -> dict:
+    """Cardio fitness (VO2max running) over the trailing window. Garmin
+    only recalculates this periodically (roughly every week or two of real
+    runs/hard cardio), not daily - real points stay sparse by nature, so
+    this shows them as-is rather than interpolating or zero-filling gaps.
+    No external fitness-age band drawn (that needs age, which isn't
+    tracked here) - just the athlete's own trend, same as
+    protein_per_bodyweight."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, vo2max_running FROM training_status "
+              "WHERE date >= ? AND date <= ? AND vo2max_running IS NOT NULL ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    if not rows:
+        return {"state": "insufficient"}
+
+    values = [r["vo2max_running"] for r in rows]
+    return {
+        "state": "full",
+        "points": rows,
+        "current": values[-1],
+        "range_start": rows[0]["date"],
+        "range_end": rows[-1]["date"],
+        "change": round(values[-1] - values[0], 1),
+        "n_readings": len(rows),
+    }
+
+
+def weight_three_ways(conn, goals: dict, today: Optional[date] = None) -> dict:
+    """Consolidates the three weight numbers this dashboard now computes,
+    each from a genuinely different method, so they can be shown side by
+    side instead of scattered across pages with no cross-reference:
+    - trend_weight_lb: pure logged-weight trend (7-day EWMA), no calories.
+    - calorie_balance_lb: expected_weight_from_calories' energy-balance
+      estimate, no logged-weight trend beyond its own anchor point.
+    - checkpoint: the goals.yaml target this is all heading toward.
+    Flags "diverging" when the two live estimates differ by more than 2 lb
+    - not an error, but usually means a logging gap on one side (a day of
+    unlogged food most commonly), worth a one-line explanation rather than
+    silently showing two numbers that don't match."""
+    today = today or config.snapshot_date()
+    trend = trend_weight(conn, goals, today)
+    calorie_est = expected_weight_from_calories(conn, goals, today)
+
+    trend_lb = trend.get("trend_weight_lb")
+    calorie_lb = calorie_est.get("expected_weight_today_lb")
+    if trend_lb is None and calorie_lb is None:
+        return {"state": "insufficient"}
+
+    divergence = round(trend_lb - calorie_lb, 1) if (trend_lb is not None and calorie_lb is not None) else None
+    return {
+        "state": "full",
+        "trend_weight_lb": trend_lb,
+        "rate_lb_per_week": trend.get("rate_lb_per_week"),
+        "calorie_balance_lb": calorie_lb,
+        "calorie_balance_state": calorie_est.get("state"),
+        "checkpoint": trend.get("checkpoint"),
+        "projected_checkpoint_date_range": trend.get("projected_checkpoint_date_range"),
+        "divergence_lb": divergence,
+        "diverging": divergence is not None and abs(divergence) > 2,
+    }
+
+
+DOCTOR_SUMMARY_NUTRIENT_KEYS = [
+    "saturated_fat_g", "cholesterol_mg", "fiber_g", "sodium_mg", "sugar_g", "potassium_mg",
+]
+
+
+def doctor_visit_summary(conn, goals: dict, days: int = 90, today: Optional[date] = None) -> dict:
+    """A focused summary for bringing to a doctor's appointment - weight
+    trend, activity level, and specifically the cholesterol-relevant
+    nutrients (saturated fat, cholesterol, fiber, sodium, sugar,
+    potassium), not every tracked metric. Reuses trend_weight() and
+    nutrition_window_summary("month") rather than recomputing either -
+    nutrition history is short enough (see nutrition_daily's own limits)
+    that "month to date" and "last 90 days" cover essentially the same
+    real data anyway."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days - 1)
+
+    trend = trend_weight(conn, goals, today)
+    weight_rows = db.fetch_all_dicts(
+        conn, "SELECT date, weight_lb FROM daily_metrics WHERE date >= ? AND date <= ? AND weight_lb IS NOT NULL ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+
+    steps_rows = db.fetch_all_dicts(
+        conn, "SELECT AVG(steps) as avg_steps FROM daily_metrics WHERE date >= ? AND date <= ? AND steps IS NOT NULL",
+        (start.isoformat(), today.isoformat()),
+    )
+    avg_steps = round(steps_rows[0]["avg_steps"]) if steps_rows and steps_rows[0]["avg_steps"] is not None else None
+
+    activity_counts = db.fetch_all_dicts(
+        conn, "SELECT bucket, COUNT(*) as n FROM activities WHERE date >= ? AND date <= ? GROUP BY bucket",
+        (start.isoformat(), today.isoformat()),
+    )
+    training_days_rows = db.fetch_all_dicts(
+        conn, "SELECT COUNT(DISTINCT date) as n FROM activities WHERE date >= ? AND date <= ?",
+        (start.isoformat(), today.isoformat()),
+    )
+
+    nutrition = nutrition_window_summary(conn, goals, "month", today)
+    nutrient_lookup = {n["key"]: n for n in nutrition.get("nutrients", [])} if nutrition["state"] == "full" else {}
+
+    return {
+        "generated_date": today.isoformat(),
+        "range_start": start.isoformat(),
+        "range_end": today.isoformat(),
+        "profile": goals.get("nutrition", {}).get("profile", {}),
+        "weight": {
+            "current_trend_lb": trend.get("trend_weight_lb"),
+            "start_lb": weight_rows[0]["weight_lb"] if weight_rows else None,
+            "start_date": weight_rows[0]["date"] if weight_rows else None,
+            "rate_lb_per_week": trend.get("rate_lb_per_week"),
+            "checkpoint": trend.get("checkpoint"),
+        },
+        "activity": {
+            "avg_daily_steps": avg_steps,
+            "training_days": training_days_rows[0]["n"] if training_days_rows else 0,
+            "window_days": days,
+            "sessions_by_bucket": {r["bucket"]: r["n"] for r in activity_counts},
+        },
+        "nutrition": {
+            "state": nutrition["state"],
+            "window_label": nutrition.get("range_label"),
+            "n_days_logged": nutrition.get("n_days"),
+            "calories_avg": nutrition.get("calories", {}).get("value"),
+            "nutrients": [nutrient_lookup[k] for k in DOCTOR_SUMMARY_NUTRIENT_KEYS if k in nutrient_lookup],
+        },
+    }

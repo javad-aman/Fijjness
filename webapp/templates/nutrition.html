@@ -6,6 +6,7 @@
 <div class="header">
   <div class="date">Nutrition</div>
   <div class="through">from a manually-exported MyFitnessPal file - see scripts/import_myfitnesspal.py</div>
+  <div class="sync"><a href="/summary" target="_blank" style="color:inherit;">Doctor-visit summary →</a></div>
 </div>
 
 <div class="grid">
@@ -52,33 +53,55 @@
   </div>
   {% endfor %}
 
-  <!-- EXPECTED WEIGHT FROM CALORIE BALANCE -->
+  <!-- WEIGHT, THREE WAYS -->
   <div class="card c4">
-    <div class="eyebrow" style="margin-bottom: 4px;">Expected weight (calorie-balance estimate)</div>
-    {% if expected_weight.state != 'full' %}
-    <p class="compare" style="margin: 10px 0 0;">
-      Not enough overlap yet between logged nutrition and logged activity to estimate this
-      ({{ expected_weight.days_with_both_values }} qualifying day{{ 's' if expected_weight.days_with_both_values != 1 else '' }}
-      since your last real weigh-in on {{ expected_weight.anchor_date }}).
-    </p>
+    <div class="eyebrow" style="margin-bottom: 4px;">Weight, three ways</div>
+    {% if weight_3way.state != 'full' %}
+    <p class="compare" style="margin: 10px 0 0;">Not enough logged weight yet to show this.</p>
     {% else %}
-    <div class="chart-sub" style="margin-bottom: 10px;">
-      From {{ expected_weight.anchor_weight_lb }} lb logged {{ expected_weight.anchor_date }} ·
-      {{ expected_weight.days_with_both_values }} of {{ expected_weight.days_in_window }} days since had both
-      nutrition and activity logged
+    <div class="chart-sub" style="margin-bottom: 10px;">Same athlete, two different methods - a gap between them usually means a logging gap, not that either is wrong</div>
+
+    <div class="nutrient-row">
+      <div class="nutrient-row-head">
+        <span class="label">Logged trend (7-day EWMA)</span>
+        <span class="nutrient-val">{{ weight_3way.trend_weight_lb }} lb</span>
+      </div>
+      {% if weight_3way.rate_lb_per_week is not none %}
+      <p class="compare" style="margin: 2px 0 0;">{{ weight_3way.rate_lb_per_week }} lb/week</p>
+      {% endif %}
     </div>
-    <div class="row" style="align-items: baseline; margin-bottom: 10px;">
-      <span class="figure-large">{{ expected_weight.expected_weight_today_lb }} lb</span>
-      <span class="compare">estimate, not a forecast</span>
+
+    <div class="nutrient-row" style="margin-top: 12px;">
+      <div class="nutrient-row-head">
+        <span class="label">Calorie-balance estimate</span>
+        <span class="nutrient-val">{{ weight_3way.calorie_balance_lb if weight_3way.calorie_balance_lb is not none else '—' }}{{ ' lb' if weight_3way.calorie_balance_lb is not none else '' }}</span>
+      </div>
+      {% if weight_3way.calorie_balance_lb is none %}
+      <p class="compare" style="margin: 2px 0 0;">Not enough overlapping nutrition + activity data yet.</p>
+      {% endif %}
     </div>
-    {% if expected_weight.projected_end_of_week_lb is defined %}
-    <p class="compare" style="margin: 0;">
+
+    {% if weight_3way.diverging %}
+    <p class="compare" style="margin: 12px 0 0; color: var(--warn);">
+      These differ by {{ weight_3way.divergence_lb | abs }} lb right now - most often means a day or two
+      of unlogged food/activity, not that the estimate is off.
+    </p>
+    {% endif %}
+
+    {% if weight_3way.checkpoint %}
+    <p class="compare" style="margin: 12px 0 0;">
+      Heading toward {{ weight_3way.checkpoint.target }} lb by {{ weight_3way.checkpoint.date }}
+      {% if weight_3way.projected_checkpoint_date_range %}
+      - projected to arrive between {{ weight_3way.projected_checkpoint_date_range[0] }} and {{ weight_3way.projected_checkpoint_date_range[1] }}
+      {% endif %}
+    </p>
+    {% endif %}
+
+    {% if expected_weight.state == 'full' and expected_weight.projected_end_of_week_lb is defined %}
+    <p class="compare" style="margin: 12px 0 0;">
       If the last {{ expected_weight.days_with_both_values_this_week }} logged days keep going:
       ~<b class="mono">{{ expected_weight.projected_end_of_week_lb }} lb</b> by {{ expected_weight.week_end_date }}
-      ({{ '+' if expected_weight.week_avg_daily_net_lb >= 0 else '' }}{{ expected_weight.week_avg_daily_net_lb }} lb/day pace)
     </p>
-    {% else %}
-    <p class="compare" style="margin: 0;">Not enough of the last 7 days logged yet for a "keep going like this week" estimate.</p>
     {% endif %}
     {% endif %}
   </div>

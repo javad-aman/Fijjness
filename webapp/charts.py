@@ -963,3 +963,60 @@ def weight_and_calories_dual_svg(data: dict, width: int = 900, height: int = 260
 
     parts.append("</svg>")
     return "".join(parts)
+
+
+def vo2max_trend_svg(data: dict, width: int = 900, height: int = 160) -> str:
+    """VO2max (running) readings, positioned by real date offset (not
+    index) since Garmin only recalculates this every week or two of real
+    runs/hard cardio - the gaps between points are real and meaningful,
+    not a regular daily cadence like most other charts in this file."""
+    points = data["points"]
+    n = len(points)
+    if n == 0:
+        return f"<svg width='{width}' height='{height}'></svg>"
+
+    values = [p["vo2max_running"] for p in points]
+    lo, hi = min(values), max(values)
+    pad_val = (hi - lo) * 0.2 or 1
+    lo, hi = lo - pad_val, hi + pad_val
+
+    pad_left, pad_right, pad_top, pad_bottom = 8, 34, 16, 22
+    plot_w = width - pad_left - pad_right
+    plot_h = height - pad_top - pad_bottom
+
+    start_d = _date.fromisoformat(points[0]["date"])
+    end_d = _date.fromisoformat(points[-1]["date"])
+    total_days = max((end_d - start_d).days, 1)
+
+    def x_of(date_str: str) -> float:
+        d = _date.fromisoformat(date_str)
+        return pad_left + ((d - start_d).days / total_days) * plot_w
+
+    def y_of(v: float) -> float:
+        return pad_top + plot_h - ((v - lo) / (hi - lo)) * plot_h
+
+    parts = [f"<svg viewBox='0 0 {width} {height}' preserveAspectRatio='none' style='width:100%;height:100%;display:block'>"]
+    parts.append(f"<rect width='{width}' height='{height}' fill='{GROUND}'/>")
+
+    grid_step = max(round((hi - lo) / 3), 1)
+    g = (int(lo / grid_step) + 1) * grid_step
+    while g < hi:
+        gy = y_of(g)
+        parts.append(f"<line x1='{pad_left}' y1='{gy:.1f}' x2='{width - pad_right}' y2='{gy:.1f}' stroke='{LINE_SOFT}' stroke-width='1'/>")
+        parts.append(f"<text x='{width - pad_right + 8}' y='{gy + 4:.1f}' {FONT} font-size='10.5' fill='{DIM}'>{g}</text>")
+        g += grid_step
+
+    line_points = [(x_of(p["date"]), y_of(p["vo2max_running"])) for p in points]
+    if len(line_points) >= 2:
+        path = "M " + " L ".join(f"{x:.1f} {y:.1f}" for x, y in line_points)
+        parts.append(f"<path d='{path}' fill='none' stroke='{NEUTRAL}' stroke-width='1.5' opacity='0.8'/>")
+
+    for p, (x, y) in zip(points, line_points):
+        tip = _tip([_human_date(p["date"]), f"VO2max {p['vo2max_running']}"])
+        parts.append(f"<circle data-tip='{tip}' cx='{x:.1f}' cy='{y:.1f}' r='3' fill='{MUTED}'/>")
+
+    parts.append(f"<text x='{pad_left}' y='{height - 6}' {LABEL_FONT} font-size='9.5' fill='{DIM}'>{_esc(_human_date(points[0]['date']))}</text>")
+    parts.append(f"<text x='{pad_left + plot_w:.1f}' y='{height - 6}' {LABEL_FONT} font-size='9.5' fill='{DIM}' text-anchor='end'>{_esc(_human_date(points[-1]['date']))}</text>")
+
+    parts.append("</svg>")
+    return "".join(parts)

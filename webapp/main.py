@@ -410,12 +410,24 @@ def activity(request: Request):
         cycle_range = f"trailing {cycle_weeks} weeks"
         heatmap = analytics.calendar_heatmap_data(conn)
         avg_calories = analytics.avg_calories_per_session(conn)
+        vo2max = analytics.vo2max_trend(conn)
 
         activity_rows = db.fetch_all_dicts(
             conn,
             "SELECT date, activity_type, name, duration_min, calories FROM activities "
             "ORDER BY date DESC LIMIT 100",
         )
+
+        vo2max_module = {"state": vo2max["state"]}
+        if vo2max["state"] == "full":
+            vo2max_module.update({
+                "svg": charts.vo2max_trend_svg(vo2max),
+                "current": vo2max["current"],
+                "change": vo2max["change"],
+                "range_start": charts._human_date(vo2max["range_start"]),
+                "range_end": charts._human_date(vo2max["range_end"]),
+                "n_readings": vo2max["n_readings"],
+            })
 
         return templates.TemplateResponse(
             request,
@@ -432,6 +444,7 @@ def activity(request: Request):
                 "heatmap_month": heatmap["month"],
                 "avg_calories": avg_calories,
                 "activities": activity_rows,
+                "vo2max_module": vo2max_module,
             },
         )
     finally:
@@ -524,6 +537,7 @@ def nutrition(request: Request):
         catch_up = analytics.calorie_catch_up(conn, config.GOALS)
         advice_card = _advice_card(conn)
         expected_weight = analytics.expected_weight_from_calories(conn, config.GOALS)
+        weight_3way = analytics.weight_three_ways(conn, config.GOALS)
 
         daily = analytics.nutrition_daily_series(conn)
         meals = analytics.meal_breakdown(conn)
@@ -591,6 +605,7 @@ def nutrition(request: Request):
                 "train_rest_insufficient": train_rest_insufficient,
                 "advice_card": advice_card,
                 "expected_weight": expected_weight,
+                "weight_3way": weight_3way,
             },
         )
     finally:
@@ -605,3 +620,18 @@ def generate_nutrition_advice():
     finally:
         conn.close()
     return RedirectResponse(url="/nutrition", status_code=303)
+
+
+@app.get("/summary", response_class=HTMLResponse)
+def doctor_summary(request: Request):
+    """Printable doctor-visit summary - not part of the daily-use nav
+    (linked from the Nutrition page), own standalone light template (no
+    dark theme, no nav) since it's meant to be printed or saved as PDF via
+    the browser's own print dialog, not the app's own dark instrument-
+    panel look."""
+    conn = db.get_connection()
+    try:
+        summary = analytics.doctor_visit_summary(conn, config.GOALS)
+        return templates.TemplateResponse(request, "summary.html", {"s": summary})
+    finally:
+        conn.close()

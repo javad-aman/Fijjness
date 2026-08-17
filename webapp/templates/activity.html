@@ -2,7 +2,23 @@
 {% block title %}Activity — Fitness{% endblock %}
 
 {% block content %}
-<div class="eyebrow" style="margin-bottom: 12px;">Weekly active calories by type</div>
+<div class="eyebrow" style="margin-bottom: 12px;">Cardio fitness (VO2max)</div>
+<div class="card">
+  {% if vo2max_module.state == 'full' %}
+  <div class="row" style="align-items: baseline; margin-bottom: 6px;">
+    <span class="figure-large">{{ vo2max_module.current }}</span>
+    <span class="compare">
+      {{ '+' if vo2max_module.change >= 0 else '' }}{{ vo2max_module.change }} since {{ vo2max_module.range_start }}
+      ({{ vo2max_module.n_readings }} reading{{ 's' if vo2max_module.n_readings != 1 else '' }})
+    </span>
+  </div>
+  <div class="chart-scroll">{{ vo2max_module.svg | safe }}</div>
+  {% else %}
+  <span class="compare">No VO2max readings synced yet.</span>
+  {% endif %}
+</div>
+
+<div class="eyebrow" style="margin-bottom: 12px; margin-top: 20px;">Weekly active calories by type</div>
 <div class="card">
   <div class="chart-scroll">{{ stacked_bar_svg | safe }}</div>
 </div>

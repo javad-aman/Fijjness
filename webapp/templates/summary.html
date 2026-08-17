@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Health Summary — {{ s.generated_date }}</title>
+  <style>
+    :root {
+      --ink: #1a1a1a;
+      --muted: #5a5a5a;
+      --line: #d6d6d6;
+      --accent: #2c5f8a;
+      --warn: #a05a00;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 40px;
+      background: #ffffff;
+      color: var(--ink);
+      font-family: Georgia, 'Times New Roman', serif;
+      font-size: 14px;
+      line-height: 1.5;
+      max-width: 800px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-family: -apple-system, Segoe UI, sans-serif;
+      font-size: 22px;
+      margin: 0 0 4px;
+    }
+    .subtitle {
+      font-family: -apple-system, Segoe UI, sans-serif;
+      font-size: 13px;
+      color: var(--muted);
+      margin-bottom: 20px;
+    }
+    .print-btn {
+      font-family: -apple-system, Segoe UI, sans-serif;
+      font-size: 13px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      padding: 8px 16px;
+      cursor: pointer;
+      float: right;
+    }
+    section {
+      border-top: 1px solid var(--line);
+      padding-top: 14px;
+      margin-top: 20px;
+    }
+    h2 {
+      font-family: -apple-system, Segoe UI, sans-serif;
+      font-size: 15px;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--accent);
+      margin: 0 0 10px;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 4px 8px 4px 0; vertical-align: top; }
+    td.label { color: var(--muted); width: 45%; }
+    td.value { font-weight: 600; }
+    .flag { color: var(--warn); font-weight: 600; }
+    .note {
+      font-family: -apple-system, Segoe UI, sans-serif;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 16px;
+    }
+    .footer {
+      margin-top: 30px;
+      font-family: -apple-system, Segoe UI, sans-serif;
+      font-size: 11px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      padding-top: 10px;
+    }
+    @media print {
+      .print-btn { display: none; }
+      body { padding: 0; }
+    }
+  </style>
+</head>
+<body>
+  <button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
+  <h1>Health Summary</h1>
+  <div class="subtitle">
+    Generated {{ s.generated_date }} · {{ s.range_start }} to {{ s.range_end }} (90 days) ·
+    {{ s.profile.sex | capitalize }}, {{ (s.profile.height_in // 12) | int }}'{{ s.profile.height_in % 12 }}"
+  </div>
+
+  {% if s.profile.health_notes %}
+  <p class="note">{{ s.profile.health_notes }}</p>
+  {% endif %}
+
+  <section>
+    <h2>Weight</h2>
+    <table>
+      <tr><td class="label">Current trend (7-day average)</td><td class="value">{{ s.weight.current_trend_lb }} lb</td></tr>
+      {% if s.weight.start_lb %}
+      <tr><td class="label">Weight on {{ s.weight.start_date }}</td><td class="value">{{ s.weight.start_lb }} lb</td></tr>
+      {% endif %}
+      {% if s.weight.rate_lb_per_week is not none %}
+      <tr><td class="label">Recent rate of change</td><td class="value">{{ s.weight.rate_lb_per_week }} lb/week</td></tr>
+      {% endif %}
+      {% if s.weight.checkpoint %}
+      <tr><td class="label">Goal</td><td class="value">{{ s.weight.checkpoint.target }} lb by {{ s.weight.checkpoint.date }}</td></tr>
+      {% endif %}
+    </table>
+  </section>
+
+  <section>
+    <h2>Activity ({{ s.activity.window_days }} days)</h2>
+    <table>
+      {% if s.activity.avg_daily_steps %}
+      <tr><td class="label">Average daily steps</td><td class="value">{{ "{:,}".format(s.activity.avg_daily_steps) }}</td></tr>
+      {% endif %}
+      <tr><td class="label">Days with a logged training session</td><td class="value">{{ s.activity.training_days }} of {{ s.activity.window_days }}</td></tr>
+      {% for bucket, n in s.activity.sessions_by_bucket.items() %}
+      <tr><td class="label">{{ bucket | capitalize }} sessions</td><td class="value">{{ n }}</td></tr>
+      {% endfor %}
+    </table>
+  </section>
+
+  <section>
+    <h2>Nutrition — cholesterol-relevant intake</h2>
+    {% if s.nutrition.state != 'full' %}
+    <p class="note">No nutrition data logged in this window.</p>
+    {% else %}
+    <p class="note" style="margin-bottom: 10px;">
+      Averaged over {{ s.nutrition.n_days_logged }} logged days ({{ s.nutrition.window_label }}) ·
+      {{ "{:,}".format(s.nutrition.calories_avg) }} cal/day average
+    </p>
+    <table>
+      {% for n in s.nutrition.nutrients %}
+      <tr>
+        <td class="label">{{ n.label }} (daily average)</td>
+        <td class="value {{ 'flag' if n.status in ('over', 'under') else '' }}">
+          {{ n.value }}{{ n.unit }} <span style="font-weight: 400; color: var(--muted);">({{ '≥' if n.direction == 'min' else '≤' }} {{ n.goal }}{{ n.unit }} goal)</span>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+    {% endif %}
+  </section>
+
+  <div class="footer">
+    Generated from personally logged Garmin and MyFitnessPal data. This is a
+    self-tracked summary, not a clinical record - intended to support a
+    conversation with a healthcare provider, not replace lab work or a
+    professional assessment.
+  </div>
+</body>
+</html>
