@@ -1993,3 +1993,98 @@ def doctor_visit_summary(conn, goals: dict, days: int = 90, today: Optional[date
             "nutrients": [nutrient_lookup[k] for k in DOCTOR_SUMMARY_NUTRIENT_KEYS if k in nutrient_lookup],
         },
     }
+
+
+# ---- Trends page - long-run trend lines, deliberately excludes Body
+# Battery and sleep (user's own explicit call: those read as stress-
+# inducing, not useful, for this athlete). ------------------------------
+
+def resting_hr_trend(conn, days: int = 180, today: Optional[date] = None) -> dict:
+    """Resting HR over the trailing window - a plain trend, not a flagged
+    metric (the elevated/not-elevated judgment already lives in
+    resting_hr_elevation() / Recovery; this page is for the shape over
+    time, not another alert)."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days - 1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, resting_hr FROM daily_metrics WHERE date >= ? AND date <= ? AND resting_hr IS NOT NULL ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    if not rows:
+        return {"state": "insufficient"}
+    values = [r["resting_hr"] for r in rows]
+    return {
+        "state": "full",
+        "points": rows,
+        "current": values[-1],
+        "range_start": rows[0]["date"],
+        "range_end": rows[-1]["date"],
+        "avg": round(sum(values) / len(values), 1),
+    }
+
+
+def training_load_trend(conn, days: int = 90, today: Optional[date] = None) -> dict:
+    """Daily acute:chronic training-load ratio over the trailing window -
+    the same 7d-acute / 28d-chronic-weekly-avg model as
+    acute_chronic_load_ratio(), just walked day by day to make a trend
+    instead of one current value. Computed from a single fetch of raw
+    per-activity training_load (grouped in Python), not by calling
+    acute_chronic_load_ratio() once per day - that would be 2 queries per
+    day, and every query is a real network round trip against Turso in
+    production, not free like local SQLite."""
+    today = today or config.snapshot_date()
+    window_start = today - timedelta(days=days - 1)
+    fetch_start = window_start - timedelta(days=27)  # 28-day chronic lookback for the earliest point
+
+    rows = db.fetch_all_dicts(
+        conn, "SELECT date, training_load FROM activities WHERE date >= ? AND date <= ? AND training_load IS NOT NULL",
+        (fetch_start.isoformat(), today.isoformat()),
+    )
+    daily_load: dict[str, float] = {}
+    for r in rows:
+        daily_load[r["date"]] = daily_load.get(r["date"], 0) + r["training_load"]
+
+    points = []
+    d = window_start
+    while d <= today:
+        acute = sum(daily_load.get((d - timedelta(days=i)).isoformat(), 0) for i in range(7))
+        chronic_weekly_avg = sum(daily_load.get((d - timedelta(days=i)).isoformat(), 0) for i in range(28)) / 4
+        if chronic_weekly_avg:
+            points.append({"date": d.isoformat(), "ratio": round(acute / chronic_weekly_avg, 2)})
+        d += timedelta(days=1)
+
+    if not points:
+        return {"state": "insufficient"}
+    return {
+        "state": "full",
+        "points": points,
+        "current": points[-1]["ratio"],
+        "range_start": points[0]["date"],
+        "range_end": points[-1]["date"],
+    }
+
+
+def all_nutrient_trends(conn, days: int = 60, today: Optional[date] = None) -> dict:
+    """Day-by-day series for every tracked nutrient in NUTRIENT_SPECS
+    (calories has its own dedicated chart on the Nutrition page and isn't
+    part of that list) - the period-average cards elsewhere can't show
+    whether an "over" average came from one bad day or a steady pattern;
+    this can."""
+    today = today or config.snapshot_date()
+    start = today - timedelta(days=days - 1)
+    rows = db.fetch_all_dicts(
+        conn, "SELECT * FROM nutrition_daily WHERE date >= ? AND date <= ? ORDER BY date",
+        (start.isoformat(), today.isoformat()),
+    )
+    if not rows:
+        return {"state": "insufficient"}
+
+    trends = {}
+    for key, label, unit, goal_key, direction in NUTRIENT_SPECS:
+        points = [{"date": r["date"], "value": r[key]} for r in rows if r[key] is not None]
+        if points:
+            trends[key] = {"label": label, "unit": unit, "points": points}
+
+    if not trends:
+        return {"state": "insufficient"}
+    return {"state": "full", "trends": trends, "range_start": rows[0]["date"], "range_end": rows[-1]["date"]}

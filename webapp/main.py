@@ -622,6 +622,59 @@ def generate_nutrition_advice():
     return RedirectResponse(url="/nutrition", status_code=303)
 
 
+@app.get("/trends", response_class=HTMLResponse)
+def trends(request: Request):
+    conn = db.get_connection()
+    try:
+        resting_hr = analytics.resting_hr_trend(conn)
+        load = analytics.training_load_trend(conn)
+        nutrients = analytics.all_nutrient_trends(conn)
+
+        resting_hr_module = {"state": resting_hr["state"]}
+        if resting_hr["state"] == "full":
+            resting_hr_module.update({
+                "svg": charts.resting_hr_trend_svg(resting_hr),
+                "current": resting_hr["current"],
+                "avg": resting_hr["avg"],
+                "range_start": charts._human_date(resting_hr["range_start"]),
+                "range_end": charts._human_date(resting_hr["range_end"]),
+            })
+
+        load_module = {"state": load["state"]}
+        if load["state"] == "full":
+            load_module.update({
+                "svg": charts.training_load_trend_svg(load),
+                "current": load["current"],
+                "range_start": charts._human_date(load["range_start"]),
+                "range_end": charts._human_date(load["range_end"]),
+            })
+
+        nutrient_cards = []
+        if nutrients["state"] == "full":
+            for key, t in nutrients["trends"].items():
+                nutrient_cards.append({
+                    "label": t["label"],
+                    "unit": t["unit"],
+                    "current": t["points"][-1]["value"],
+                    "svg": charts.nutrient_trend_svg(t["points"], t["unit"]),
+                })
+            nutrient_cards.sort(key=lambda c: c["label"])
+
+        return templates.TemplateResponse(
+            request,
+            "trends.html",
+            {
+                "active_page": "trends",
+                "resting_hr_module": resting_hr_module,
+                "load_module": load_module,
+                "nutrient_cards": nutrient_cards,
+                "nutrients_state": nutrients["state"],
+            },
+        )
+    finally:
+        conn.close()
+
+
 @app.get("/summary", response_class=HTMLResponse)
 def doctor_summary(request: Request):
     """Printable doctor-visit summary - not part of the daily-use nav

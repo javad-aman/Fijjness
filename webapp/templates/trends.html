@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}Trends — Fitness{% endblock %}
+
+{% block content %}
+
+<div class="header">
+  <div class="date">Trends</div>
+  <div class="through">Long-run shape, not another daily number</div>
+</div>
+
+<div class="grid">
+
+  <!-- LINKS OUT -->
+  <div class="card c12" style="padding: 14px 20px;">
+    <div class="row" style="flex-wrap: wrap; gap: 18px; align-items: center;">
+      <span class="compare" style="margin: 0;">Already tracked elsewhere, not duplicated here:</span>
+      <a href="/activity" class="compare" style="margin: 0;">VO2max →</a>
+      <a href="/" class="compare" style="margin: 0;">Weight →</a>
+      <a href="/" class="compare" style="margin: 0;">Steps →</a>
+    </div>
+  </div>
+
+  <!-- RESTING HR -->
+  <div class="card c6">
+    {% if resting_hr_module.state != 'full' %}
+    <div class="eyebrow" style="margin-bottom: 12px;">Resting heart rate</div>
+    <p class="compare" style="margin: 0;">Not enough resting-HR history yet.</p>
+    {% else %}
+    <div class="chart-title">{{ resting_hr_module.current }} bpm most recent · {{ resting_hr_module.avg }} bpm average</div>
+    <div class="chart-sub">{{ resting_hr_module.range_start }} – {{ resting_hr_module.range_end }}</div>
+    <div class="chart-frame">{{ resting_hr_module.svg | safe }}</div>
+    {% endif %}
+  </div>
+
+  <!-- TRAINING LOAD / ACWR -->
+  <div class="card c6">
+    {% if load_module.state != 'full' %}
+    <div class="eyebrow" style="margin-bottom: 12px;">Training load (acute:chronic ratio)</div>
+    <p class="compare" style="margin: 0;">Not enough training-load history yet.</p>
+    {% else %}
+    <div class="chart-title">{{ load_module.current }} ratio, most recent</div>
+    <div class="chart-sub">7-day load vs. 28-day weekly average · dashed line marks the 1.5 "ramping fast" threshold · {{ load_module.range_start }} – {{ load_module.range_end }}</div>
+    <div class="chart-frame">{{ load_module.svg | safe }}</div>
+    {% endif %}
+  </div>
+
+  <!-- NUTRIENT TRENDS -->
+  <div class="card c12">
+    <div class="eyebrow" style="margin-bottom: 4px;">Nutrient trend over time</div>
+    {% if nutrients_state != 'full' %}
+    <p class="compare" style="margin: 10px 0 0;">No nutrition data imported yet.</p>
+    {% else %}
+    <div class="chart-sub" style="margin-bottom: 14px;">Calories already has its own chart on the Nutrition page - these are everything else, at a glance</div>
+    <div class="grid" style="grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px;">
+      {% for n in nutrient_cards %}
+      <div class="card" style="padding: 12px 14px;">
+        <div class="nutrient-row-head" style="margin-bottom: 6px;">
+          <span class="label">{{ n.label }}</span>
+          <span class="nutrient-val">{{ n.current }}{{ n.unit }}</span>
+        </div>
+        {{ n.svg | safe }}
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+{% endblock %}
