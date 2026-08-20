@@ -2003,7 +2003,10 @@ def resting_hr_trend(conn, days: int = 180, today: Optional[date] = None) -> dic
     """Resting HR over the trailing window - a plain trend, not a flagged
     metric (the elevated/not-elevated judgment already lives in
     resting_hr_elevation() / Recovery; this page is for the shape over
-    time, not another alert)."""
+    time, not another alert). Carries a 7-day EWMA (same smoothing
+    trend_weight() uses) alongside the raw daily readings so the chart can
+    draw a rolling-average line through the day-to-day noise instead of
+    just a bare, hard-to-read scatter of dots."""
     today = today or config.snapshot_date()
     start = today - timedelta(days=days - 1)
     rows = db.fetch_all_dicts(
@@ -2013,13 +2016,32 @@ def resting_hr_trend(conn, days: int = 180, today: Optional[date] = None) -> dic
     if not rows:
         return {"state": "insufficient"}
     values = [r["resting_hr"] for r in rows]
+    ewma_series = _ewma(values)
+    points = [
+        {"date": r["date"], "resting_hr": r["resting_hr"], "ewma": round(e, 1)}
+        for r, e in zip(rows, ewma_series)
+    ]
+    n = len(values)
+    sorted_vals = sorted(values)
+    median = (
+        sorted_vals[n // 2] if n % 2
+        else round((sorted_vals[n // 2 - 1] + sorted_vals[n // 2]) / 2, 1)
+    )
+    change = round(ewma_series[-1] - ewma_series[0], 1)
+    direction = "stable" if abs(change) < 1 else ("down" if change < 0 else "up")
     return {
         "state": "full",
-        "points": rows,
+        "points": points,
         "current": values[-1],
+        "current_trend": round(ewma_series[-1], 1),
+        "avg": round(sum(values) / n, 1),
+        "median": median,
+        "min": min(values),
+        "max": max(values),
         "range_start": rows[0]["date"],
         "range_end": rows[-1]["date"],
-        "avg": round(sum(values) / len(values), 1),
+        "change": change,
+        "direction": direction,
     }
 
 
@@ -2055,23 +2077,39 @@ def training_load_trend(conn, days: int = 90, today: Optional[date] = None) -> d
 
     if not points:
         return {"state": "insufficient"}
+    ratios = [p["ratio"] for p in points]
+    current = points[-1]["ratio"]
+    if current >= 1.5:
+        narrative = "ramping"
+    elif current <= 0.8:
+        narrative = "tapering"
+    else:
+        narrative = "steady"
     return {
         "state": "full",
         "points": points,
-        "current": points[-1]["ratio"],
+        "current": current,
+        "avg": round(sum(ratios) / len(ratios), 2),
+        "min": min(ratios),
+        "max": max(ratios),
         "range_start": points[0]["date"],
         "range_end": points[-1]["date"],
+        "narrative": narrative,
     }
 
 
-def all_nutrient_trends(conn, days: int = 60, today: Optional[date] = None) -> dict:
+def all_nutrient_trends(conn, goals: dict, days: int = 60, today: Optional[date] = None) -> dict:
     """Day-by-day series for every tracked nutrient in NUTRIENT_SPECS
     (calories has its own dedicated chart on the Nutrition page and isn't
     part of that list) - the period-average cards elsewhere can't show
     whether an "over" average came from one bad day or a steady pattern;
-    this can."""
+    this can. Each nutrient also gets its window average scored against its
+    goal via the same _nutrient_status good/near/under/over used on the
+    Nutrition page, so a glance at color tells you whether that nutrient
+    has been on track over the whole window, not just today."""
     today = today or config.snapshot_date()
     start = today - timedelta(days=days - 1)
+    nutrition_goals = goals.get("nutrition", {})
     rows = db.fetch_all_dicts(
         conn, "SELECT * FROM nutrition_daily WHERE date >= ? AND date <= ? ORDER BY date",
         (start.isoformat(), today.isoformat()),
@@ -2082,8 +2120,18 @@ def all_nutrient_trends(conn, days: int = 60, today: Optional[date] = None) -> d
     trends = {}
     for key, label, unit, goal_key, direction in NUTRIENT_SPECS:
         points = [{"date": r["date"], "value": r[key]} for r in rows if r[key] is not None]
-        if points:
-            trends[key] = {"label": label, "unit": unit, "points": points}
+        if not points:
+            continue
+        values = [p["value"] for p in points]
+        avg = round(sum(values) / len(values), 1)
+        goal = 100 if goal_key is None else nutrition_goals.get(goal_key)
+        status = _nutrient_status(avg, goal, direction) if goal is not None else None
+        fill_pct = round(min(avg / goal, 1) * 100, 1) if goal else None
+        trends[key] = {
+            "label": label, "unit": unit, "points": points,
+            "avg": avg, "goal": goal, "direction": direction,
+            "status": status, "fill_pct": fill_pct,
+        }
 
     if not trends:
         return {"state": "insufficient"}

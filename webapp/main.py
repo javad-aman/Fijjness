@@ -628,14 +628,20 @@ def trends(request: Request):
     try:
         resting_hr = analytics.resting_hr_trend(conn)
         load = analytics.training_load_trend(conn)
-        nutrients = analytics.all_nutrient_trends(conn)
+        nutrients = analytics.all_nutrient_trends(conn, config.GOALS)
 
         resting_hr_module = {"state": resting_hr["state"]}
         if resting_hr["state"] == "full":
             resting_hr_module.update({
                 "svg": charts.resting_hr_trend_svg(resting_hr),
                 "current": resting_hr["current"],
+                "current_trend": resting_hr["current_trend"],
                 "avg": resting_hr["avg"],
+                "median": resting_hr["median"],
+                "min": resting_hr["min"],
+                "max": resting_hr["max"],
+                "change": resting_hr["change"],
+                "direction": resting_hr["direction"],
                 "range_start": charts._human_date(resting_hr["range_start"]),
                 "range_end": charts._human_date(resting_hr["range_end"]),
             })
@@ -645,6 +651,10 @@ def trends(request: Request):
             load_module.update({
                 "svg": charts.training_load_trend_svg(load),
                 "current": load["current"],
+                "avg": load["avg"],
+                "min": load["min"],
+                "max": load["max"],
+                "narrative": load["narrative"],
                 "range_start": charts._human_date(load["range_start"]),
                 "range_end": charts._human_date(load["range_end"]),
             })
@@ -656,7 +666,12 @@ def trends(request: Request):
                     "label": t["label"],
                     "unit": t["unit"],
                     "current": t["points"][-1]["value"],
-                    "svg": charts.nutrient_trend_svg(t["points"], t["unit"]),
+                    "avg": t["avg"],
+                    "goal": t["goal"],
+                    "direction": t["direction"],
+                    "status": t["status"],
+                    "fill_pct": t["fill_pct"],
+                    "svg": charts.nutrient_trend_svg(t["points"], t["unit"], goal=t["goal"], status=t["status"]),
                 })
             nutrient_cards.sort(key=lambda c: c["label"])
 
