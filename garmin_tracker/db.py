@@ -20,8 +20,11 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 import requests
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from garmin_tracker import config
+
+_TURSO_RETRYABLE_ERRORS = (requests.exceptions.ConnectionError, requests.exceptions.Timeout)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS daily_metrics (
@@ -255,10 +258,22 @@ class TursoConnection:
             http_url = "https://" + http_url
         self._endpoint = http_url.rstrip("/") + "/v2/pipeline"
         self._headers = {"Authorization": f"Bearer {auth_token}"}
+        # A session (not a bare requests.post per call) reuses one TCP/TLS
+        # connection across the many sequential round-trips a bulk import
+        # makes here - hundreds of fresh handshakes in a row is exactly what
+        # was tripping intermittent ConnectionResetErrors during large
+        # MyFitnessPal imports.
+        self._session = requests.Session()
 
+    @retry(
+        retry=retry_if_exception_type(_TURSO_RETRYABLE_ERRORS),
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, min=2, max=20),
+        reraise=True,
+    )
     def _pipeline(self, stmt_requests):
         body = {"requests": stmt_requests + [{"type": "close"}]}
-        resp = requests.post(self._endpoint, json=body, headers=self._headers, timeout=30)
+        resp = self._session.post(self._endpoint, json=body, headers=self._headers, timeout=30)
         resp.raise_for_status()
         data = resp.json()
         results = []
@@ -288,7 +303,7 @@ class TursoConnection:
         pass  # each execute() is already committed server-side
 
     def close(self) -> None:
-        pass
+        self._session.close()
 
 
 # ---- Backend-agnostic helpers -----------------------------------------
